@@ -49,11 +49,13 @@ export async function POST(req) {
 
     const originalName = file.name || 'upload';
 
-    // 1) Upload file to Vercel Blob
+    // 1) Upload file to Vercel Blob — create a unique filename
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const blob = await put(originalName, buffer, {
+    const uniqueName = `${Date.now()}-${originalName}`;
+
+    const blob = await put(uniqueName, buffer, {
       access: 'public',
       contentType: file.type || 'image/jpeg',
     });
@@ -82,9 +84,10 @@ export async function POST(req) {
 
     const content = completion.choices[0]?.message?.content || '{}';
     let data;
+
     try {
       data = JSON.parse(content);
-    } catch (e) {
+    } catch {
       console.error('OpenAI JSON parse error:', content);
       return NextResponse.json(
         { error: 'OpenAI returned invalid JSON' },
