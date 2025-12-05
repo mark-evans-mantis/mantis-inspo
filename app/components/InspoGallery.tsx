@@ -25,6 +25,7 @@ export default function InspoGallery() {
   const [useCase, setUseCase] = useState('');
   const [styleTag, setStyleTag] = useState('');
   const [selected, setSelected] = useState<InspoImage | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const projectRef = useRef<HTMLInputElement | null>(null);
@@ -48,22 +49,15 @@ export default function InspoGallery() {
     fetchImages();
   }, []);
 
-  async function handleUpload(e: React.FormEvent) {
-    e.preventDefault();
-    const file = fileInputRef.current?.files?.[0];
-    if (!file) {
-      setStatus('Please choose an image.');
-      return;
-    }
-
+  async function uploadFile(file: File, project?: string) {
     setLoading(true);
     setStatus('Uploading & analyzing…');
 
     try {
       const formData = new FormData();
       formData.append('image', file);
-      if (projectRef.current?.value.trim()) {
-        formData.append('project', projectRef.current.value.trim());
+      if (project && project.trim()) {
+        formData.append('project', project.trim());
       }
 
       const res = await fetch('/api/upload', {
@@ -78,8 +72,6 @@ export default function InspoGallery() {
 
       setStatus('Done! Refreshing gallery…');
       await fetchImages();
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      if (projectRef.current) projectRef.current.value = '';
       setTimeout(() => setStatus(''), 2000);
     } catch (err: any) {
       console.error(err);
@@ -87,6 +79,55 @@ export default function InspoGallery() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleUpload(e: React.FormEvent) {
+    e.preventDefault();
+    const file = fileInputRef.current?.files?.[0];
+    if (!file) {
+      setStatus('Please choose an image.');
+      return;
+    }
+    const project = projectRef.current?.value;
+    await uploadFile(file, project);
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (projectRef.current) projectRef.current.value = '';
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // only reset if leaving the dropzone, not entering child elements
+    if ((e.target as HTMLElement).classList.contains('dropzone')) {
+      setDragActive(false);
+    }
+  }
+
+  async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) {
+      setStatus('No file dropped.');
+      return;
+    }
+
+    const file = files[0];
+    const project = projectRef.current?.value;
+    await uploadFile(file, project);
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (projectRef.current) projectRef.current.value = '';
   }
 
   function applyFilters() {
@@ -107,34 +148,56 @@ export default function InspoGallery() {
   return (
     <div className="page">
       <header className="header">
-        <h1>Mantis Inspo Library</h1>
-        <p>Upload, auto-tag, and explore visual references.</p>
+        <div className="header-inner">
+          <div>
+            <h1>MANTIS INSPO LIBRARY</h1>
+            <p>Upload, auto-tag, and explore visual references for Mantis projects.</p>
+          </div>
+          <div className="badge">INTERNAL TOOL</div>
+        </div>
       </header>
 
       <section className="section upload">
         <h2>Upload Image</h2>
-        <form onSubmit={handleUpload} className="upload-form">
-          <input
-            type="file"
-            accept="image/*"
-            ref={fileInputRef}
-            disabled={loading}
-          />
-          <input
-            type="text"
-            placeholder="Project (optional)"
-            ref={projectRef}
-            disabled={loading}
-          />
-          <button type="submit" disabled={loading}>
-            {loading ? 'Working…' : 'Upload & Analyze'}
-          </button>
-          <span className="status">{status}</span>
-        </form>
-        <p className="hint">
-          Images are stored in Vercel Blob and analyzed by OpenAI to generate tags, vibes,
-          palettes & notes.
-        </p>
+
+        <div
+          className={`dropzone ${dragActive ? 'drag-active' : ''} ${
+            loading ? 'dropzone-loading' : ''
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <div className="dropzone-content">
+            <p className="dropzone-title">
+              Drag & drop inspo here
+              <span className="dropzone-pill">.jpg .png</span>
+            </p>
+            <p className="dropzone-sub">
+              or use the upload button • We&apos;ll store it in Blob and auto-tag it
+              with OpenAI.
+            </p>
+
+            <form onSubmit={handleUpload} className="upload-form">
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                disabled={loading}
+              />
+              <input
+                type="text"
+                placeholder="Project (optional)"
+                ref={projectRef}
+                disabled={loading}
+              />
+              <button type="submit" disabled={loading}>
+                {loading ? 'Working…' : 'Upload & Analyze'}
+              </button>
+              <span className="status">{status}</span>
+            </form>
+          </div>
+        </div>
       </section>
 
       <section className="section filters">
@@ -176,7 +239,14 @@ export default function InspoGallery() {
 
       <main className="main">
         <section className="gallery-section">
-          <h2>Gallery</h2>
+          <div className="section-header-row">
+            <h2>Gallery</h2>
+            <span className="count-pill">
+              {images.length === 1
+                ? '1 image'
+                : `${images.length.toString().padStart(2, '0')} images`}
+            </span>
+          </div>
           <div className="gallery-grid">
             {images.length === 0 && (
               <p className="empty">No images yet. Upload something to start.</p>
@@ -222,6 +292,7 @@ export default function InspoGallery() {
             <button
               className="close-detail"
               onClick={() => setSelected(null)}
+              aria-label="Close details"
             >
               &times;
             </button>
