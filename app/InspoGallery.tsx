@@ -97,11 +97,10 @@ export default function InspoGallery() {
           duration = 0;
         }
 
-        // Capture at ~10% of duration, or at 1s if duration is unknown
+        // Capture at ~10% of duration, or at 1s if duration unknown
         const captureTime =
           duration > 0 ? Math.min(duration * 0.1, duration - 0.1) : 1;
 
-        // Seek then grab frame
         video.currentTime = captureTime;
       });
 
@@ -115,7 +114,7 @@ export default function InspoGallery() {
         const ctx = canvas.getContext("2d");
         if (!ctx) {
           cleanup();
-          return reject(new Error("Canvas 2D context not available"));
+          return reject(new Error("Canvas 2D context unavailable"));
         }
 
         ctx.drawImage(video, 0, 0, width, height);
@@ -124,7 +123,7 @@ export default function InspoGallery() {
           (blob) => {
             cleanup();
             if (!blob) {
-              return reject(new Error("Failed to create thumbnail blob"));
+              return reject(new Error("Failed to generate thumbnail blob"));
             }
 
             const thumbFile = new File(
@@ -153,7 +152,7 @@ export default function InspoGallery() {
     const formData = new FormData();
 
     if (file.type.startsWith("video/")) {
-      // Generate thumbnail on the client
+      // Generate video thumbnail client-side
       try {
         const { thumbFile, durationSeconds } =
           await generateVideoThumbnail(file);
@@ -163,12 +162,12 @@ export default function InspoGallery() {
           formData.append("duration", String(durationSeconds));
         }
       } catch (err) {
-        console.error("Video thumbnail generation failed:", err);
-        // Fallback: upload video without thumb/analysis
+        console.error("Thumbnail generation failed, uploading video only:", err);
+        // fallback: video without thumbnail; server will skip analysis
         formData.append("image", file);
       }
     } else {
-      // Image / GIF
+      // Static image/GIF
       formData.append("image", file);
     }
 
@@ -256,7 +255,7 @@ export default function InspoGallery() {
       const blob = new Blob([byteArray], { type: mime });
       const ext =
         mime.split("/")[1] ||
-        (mime.includes("video") ? "mp4" : mime.includes("image") ? "jpg" : "");
+        (mime.includes("video") ? "mp4" : mime.includes("image") ? "jpg" : "bin");
 
       const file = new File([blob], `imported.${ext}`, { type: mime });
 
@@ -266,11 +265,12 @@ export default function InspoGallery() {
       console.error("URL import error:", err);
       alert("Import failed.");
     }
+
     setIsImporting(false);
   }
 
   /* -----------------------------------------------------------
-     DELETE ITEM
+     DELETE
   ----------------------------------------------------------- */
   async function deleteItem(id: number) {
     const ok = confirm("Delete this asset permanently? This cannot be undone.");
@@ -278,19 +278,16 @@ export default function InspoGallery() {
 
     try {
       const res = await fetch(`/api/images/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        alert("Failed to delete.");
-        return;
-      }
+      if (!res.ok) return alert("Failed to delete item.");
       loadItems();
     } catch (err) {
       console.error("Delete error:", err);
-      alert("Error deleting asset.");
+      alert("Error deleting item.");
     }
   }
 
   /* -----------------------------------------------------------
-     RENDER
+     RENDER UI
   ----------------------------------------------------------- */
 
   return (
@@ -298,22 +295,16 @@ export default function InspoGallery() {
 
       {/* UPLOAD PANEL */}
       <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm space-y-6">
-
-        {/* Drag area */}
         <div
           className={`rounded-xl border-2 border-dashed p-8 text-center transition ${
-            dragActive
-              ? "border-black bg-neutral-100"
-              : "border-neutral-300 bg-neutral-50"
+            dragActive ? "border-black bg-neutral-100" : "border-neutral-300 bg-neutral-50"
           }`}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
           <p className="text-sm font-medium mb-2">Drag & drop media here</p>
-          <p className="text-xs text-neutral-500">
-            Supports GIFs, MP4, MOV, JPG, PNG, WEBP…
-          </p>
+          <p className="text-xs text-neutral-500">Supports GIFs, MP4, MOV, JPG, PNG, WEBP…</p>
 
           <div className="mt-4">
             <label className="cursor-pointer inline-block px-4 py-2 bg-black text-white text-xs rounded-lg hover:bg-neutral-800">
@@ -328,9 +319,7 @@ export default function InspoGallery() {
             </label>
           </div>
 
-          {isUploading && (
-            <p className="text-xs text-neutral-500 mt-2">Uploading…</p>
-          )}
+          {isUploading && <p className="text-xs text-neutral-500 mt-2">Uploading…</p>}
         </div>
 
         {/* URL IMPORT */}
@@ -340,7 +329,7 @@ export default function InspoGallery() {
             <input
               value={imageUrl}
               onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://example.com/image-or-video"
+              placeholder="https://example.com/media"
               className="flex-1 border rounded-lg px-3 py-2 text-sm"
             />
             <button
@@ -355,7 +344,6 @@ export default function InspoGallery() {
             Supports Cosmos, Pinterest, Instagram, and most media hosts.
           </p>
         </div>
-
       </section>
 
       {/* GALLERY */}
@@ -375,6 +363,7 @@ export default function InspoGallery() {
                 key={item.id}
                 className="relative group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition"
               >
+                {/* DELETE BUTTON */}
                 <button
                   onClick={() => deleteItem(item.id)}
                   className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition bg-black/50 text-white text-xs px-2 py-1 rounded"
@@ -382,6 +371,7 @@ export default function InspoGallery() {
                   Delete
                 </button>
 
+                {/* MEDIA PREVIEW */}
                 <button
                   className="w-full text-left"
                   onClick={() => setSelected(item)}
@@ -401,13 +391,11 @@ export default function InspoGallery() {
                         }}
                       />
                     ) : (
-                      <img
-                        src={item.blobUrl}
-                        className="w-full h-full object-cover"
-                      />
+                      <img src={item.blobUrl} className="w-full h-full object-cover" />
                     )}
                   </div>
 
+                  {/* METADATA PREVIEW */}
                   <div className="p-3 space-y-1">
                     <p className="text-xs font-medium text-neutral-700 truncate">
                       {item.project || item.originalName}
@@ -415,10 +403,7 @@ export default function InspoGallery() {
 
                     <div className="flex flex-wrap gap-1 text-[10px] text-neutral-500">
                       {item.style_tags?.slice(0, 3).map((tag, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 bg-neutral-100 rounded-full"
-                        >
+                        <span key={i} className="px-2 py-0.5 bg-neutral-100 rounded-full">
                           {tag}
                         </span>
                       ))}
@@ -443,8 +428,7 @@ export default function InspoGallery() {
         >
           <div
             className="bg-[#111] rounded-xl p-6 w-full max-w-4xl relative text-white overflow-auto max-h-[95vh]"
-            onClick={(e) => e.stopPropagation()}
-          >
+            onClick={(e) => e.stopPropagation()}>
             <button
               className="absolute right-4 top-4 bg-white/10 px-3 py-1 rounded text-xs"
               onClick={() => setSelected(null)}
@@ -469,6 +453,7 @@ export default function InspoGallery() {
               )}
             </div>
 
+            {/* FULL METADATA */}
             <div className="grid grid-cols-2 gap-6 text-xs">
               <div>
                 <p className="font-medium text-sm text-white mb-2">
