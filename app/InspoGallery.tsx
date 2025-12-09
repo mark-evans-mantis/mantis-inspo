@@ -35,7 +35,7 @@ export default function InspoGallery() {
   const [isImporting, setIsImporting] = useState(false);
 
   /* -----------------------------------------------------------
-     LOAD ITEMS FROM /api/images (robust against errors)
+     LOAD ITEMS FROM /api/images (robust)
   ----------------------------------------------------------- */
   async function loadItems() {
     try {
@@ -49,7 +49,6 @@ export default function InspoGallery() {
       }
 
       const data = await res.json();
-
       if (Array.isArray(data)) {
         setItems(data);
       } else {
@@ -69,11 +68,110 @@ export default function InspoGallery() {
   }, []);
 
   /* -----------------------------------------------------------
+     CLIENT-SIDE VIDEO THUMBNAIL GENERATION
+  ----------------------------------------------------------- */
+  function generateVideoThumbnail(
+    file: File
+  ): Promise<{ thumbFile: File; durationSeconds: number | null }> {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement("video");
+
+      video.preload = "metadata";
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+      };
+
+      video.addEventListener("error", () => {
+        cleanup();
+        reject(new Error("Error loading video for thumbnail."));
+      });
+
+      video.addEventListener("loadedmetadata", () => {
+        let duration = video.duration;
+        if (!Number.isFinite(duration) || duration <= 0) {
+          duration = 0;
+        }
+
+        // Capture at ~10% of duration, or at 1s if duration is unknown
+        const captureTime =
+          duration > 0 ? Math.min(duration * 0.1, duration - 0.1) : 1;
+
+        // Seek then grab frame
+        video.currentTime = captureTime;
+      });
+
+      video.addEventListener("seeked", () => {
+        const canvas = document.createElement("canvas");
+        const width = video.videoWidth || 640;
+        const height = video.videoHeight || 360;
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          cleanup();
+          return reject(new Error("Canvas 2D context not available"));
+        }
+
+        ctx.drawImage(video, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            cleanup();
+            if (!blob) {
+              return reject(new Error("Failed to create thumbnail blob"));
+            }
+
+            const thumbFile = new File(
+              [blob],
+              file.name.replace(/\.[^/.]+$/, "") + "-thumb.jpg",
+              { type: "image/jpeg" }
+            );
+
+            const durationSeconds = Number.isFinite(video.duration)
+              ? Math.round(video.duration)
+              : null;
+
+            resolve({ thumbFile, durationSeconds });
+          },
+          "image/jpeg",
+          0.85
+        );
+      });
+    });
+  }
+
+  /* -----------------------------------------------------------
      UPLOAD HANDLING (SEQUENTIAL)
   ----------------------------------------------------------- */
   async function uploadFile(file: File) {
     const formData = new FormData();
-    formData.append("image", file);
+
+    if (file.type.startsWith("video/")) {
+      // Generate thumbnail on the client
+      try {
+        const { thumbFile, durationSeconds } =
+          await generateVideoThumbnail(file);
+        formData.append("image", file);
+        formData.append("thumb", thumbFile);
+        if (durationSeconds != null) {
+          formData.append("duration", String(durationSeconds));
+        }
+      } catch (err) {
+        console.error("Video thumbnail generation failed:", err);
+        // Fallback: upload video without thumb/analysis
+        formData.append("image", file);
+      }
+    } else {
+      // Image / GIF
+      formData.append("image", file);
+    }
+
     formData.append("project", "");
 
     const res = await fetch("/api/upload", {
@@ -277,7 +375,6 @@ export default function InspoGallery() {
                 key={item.id}
                 className="relative group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition"
               >
-                {/* DELETE BUTTON */}
                 <button
                   onClick={() => deleteItem(item.id)}
                   className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition bg-black/50 text-white text-xs px-2 py-1 rounded"
@@ -285,13 +382,12 @@ export default function InspoGallery() {
                   Delete
                 </button>
 
-                {/* MEDIA PREVIEW */}
                 <button
                   className="w-full text-left"
                   onClick={() => setSelected(item)}
                 >
                   <div className="aspect-[4/3] bg-neutral-100 overflow-hidden">
-                    {item.isVideo ? (
+                    {item.mimeType?.startsWith("video/") ? (
                       <video
                         src={item.blobUrl}
                         muted
@@ -357,7 +453,7 @@ export default function InspoGallery() {
             </button>
 
             <div className="aspect-video bg-black rounded-xl overflow-hidden mb-4">
-              {selected.isVideo ? (
+              {selected.mimeType?.startsWith("video/") ? (
                 <video
                   src={selected.blobUrl}
                   controls
@@ -378,19 +474,49 @@ export default function InspoGallery() {
                 <p className="font-medium text-sm text-white mb-2">
                   {selected.originalName}
                 </p>
-                <p><span className="text-neutral-500">Project: </span>{selected.project || "—"}</p>
-                <p><span className="text-neutral-500">Medium: </span>{selected.medium}</p>
-                <p><span className="text-neutral-500">Use case: </span>{selected.use_case}</p>
-                <p><span className="text-neutral-500">Duration: </span>{selected.durationSeconds || 0}s</p>
-                <p><span className="text-neutral-500">Created: </span>{new Date(selected.created_at).toLocaleString()}</p>
+                <p>
+                  <span className="text-neutral-500">Project: </span>
+                  {selected.project || "—"}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Medium: </span>
+                  {selected.medium}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Use case: </span>
+                  {selected.use_case}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Duration: </span>
+                  {selected.durationSeconds || 0}s
+                </p>
+                <p>
+                  <span className="text-neutral-500">Created: </span>
+                  {new Date(selected.created_at).toLocaleString()}
+                </p>
               </div>
 
               <div>
-                <p><span className="text-neutral-500">Style tags: </span>{selected.style_tags?.join(", ")}</p>
-                <p><span className="text-neutral-500">Vibes: </span>{selected.vibes?.join(", ")}</p>
-                <p><span className="text-neutral-500">Color palette: </span>{selected.color_palette?.join(", ")}</p>
-                <p><span className="text-neutral-500">Brand refs: </span>{selected.brand_refs?.join(", ")}</p>
-                <p><span className="text-neutral-500">Notes: </span>{selected.notes || "—"}</p>
+                <p>
+                  <span className="text-neutral-500">Style tags: </span>
+                  {selected.style_tags?.join(", ")}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Vibes: </span>
+                  {selected.vibes?.join(", ")}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Color palette: </span>
+                  {selected.color_palette?.join(", ")}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Brand refs: </span>
+                  {selected.brand_refs?.join(", ")}
+                </p>
+                <p>
+                  <span className="text-neutral-500">Notes: </span>
+                  {selected.notes || "—"}
+                </p>
               </div>
             </div>
           </div>
