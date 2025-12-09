@@ -1,17 +1,15 @@
 "use client";
 
-import React, {
-  useState,
-  useEffect,
-  DragEvent,
-  useCallback,
-} from "react";
+import React, { useState, useEffect, DragEvent } from "react";
 
-type InspoImage = {
+type InspoItem = {
   id: number;
   blobUrl: string;
+  thumbBlobUrl: string | null;
   originalName: string;
   project: string | null;
+  mimeType: string;
+  durationSeconds: number | null;
   style_tags: string[];
   vibes: string[];
   color_palette: string[];
@@ -20,44 +18,46 @@ type InspoImage = {
   brand_refs: string[];
   notes: string | null;
   created_at: string;
+  isVideo: boolean;
+  isGif: boolean;
 };
 
 export default function InspoGallery() {
-  const [items, setItems] = useState<InspoImage[]>([]);
+  const [items, setItems] = useState<InspoItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [selected, setSelected] = useState<InspoImage | null>(null);
+  const [selected, setSelected] = useState<InspoItem | null>(null);
 
-  const [dragActive, setDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   const [imageUrl, setImageUrl] = useState("");
   const [isImporting, setIsImporting] = useState(false);
 
-  // -------------------------------------------------------------
-  // LOAD IMAGES FROM YOUR BACKEND
-  // -------------------------------------------------------------
-  async function loadImages() {
+  /* -----------------------------------------------------------
+     LOAD ITEMS FROM /api/images
+  ----------------------------------------------------------- */
+  async function loadItems() {
     try {
       setLoading(true);
       const res = await fetch("/api/images");
       const data = await res.json();
       setItems(data);
-    } catch (err) {
-      console.error("Failed to load images:", err);
+    } catch (e) {
+      console.error("Error fetching images:", e);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadImages();
+    loadItems();
   }, []);
 
-  // -------------------------------------------------------------
-  // HANDLE FILE UPLOAD (SEQUENTIAL)
-  // -------------------------------------------------------------
-  async function uploadFileToServer(file: File) {
+  /* -----------------------------------------------------------
+     UPLOAD HANDLING (SEQUENTIAL)
+  ----------------------------------------------------------- */
+  async function uploadFile(file: File) {
     const formData = new FormData();
     formData.append("image", file);
     formData.append("project", "");
@@ -71,31 +71,28 @@ export default function InspoGallery() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || "Upload failed");
     }
-
-    return res.json();
   }
 
   async function handleUpload(files: FileList | File[]) {
     setIsUploading(true);
-
     const arr = Array.from(files);
 
     for (const file of arr) {
       try {
-        await uploadFileToServer(file);
+        await uploadFile(file);
       } catch (err) {
-        console.error("Upload error:", err);
-        alert("Upload failed for a file.");
+        console.error("Upload failed:", err);
+        alert("An upload failed. Continuing with remaining files.");
       }
     }
 
     setIsUploading(false);
-    await loadImages(); // refresh gallery from DB
+    loadItems();
   }
 
-  // -------------------------------------------------------------
-  // DRAG & DROP HANDLERS
-  // -------------------------------------------------------------
+  /* -----------------------------------------------------------
+     DRAG & DROP
+  ----------------------------------------------------------- */
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragActive(true);
@@ -114,81 +111,104 @@ export default function InspoGallery() {
     }
   };
 
-  // -------------------------------------------------------------
-  // URL IMPORT → FILE → UPLOAD
-  // -------------------------------------------------------------
+  /* -----------------------------------------------------------
+     URL IMPORT → /api/fetch-image → create File → upload
+  ----------------------------------------------------------- */
   async function importFromUrl() {
     if (!imageUrl) return;
+    setIsImporting(true);
 
     try {
-      setIsImporting(true);
-
       const res = await fetch("/api/fetch-image", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: imageUrl }),
+        headers: { "Content-Type": "application/json" },
       });
 
       if (!res.ok) {
-        alert("Could not import from link.");
+        alert("Failed to import from URL.");
+        setIsImporting(false);
         return;
       }
 
       const data = await res.json();
       const base64 = data.base64;
-      const contentType = data.contentType || "image/jpeg";
+      const mime = data.contentType || "application/octet-stream";
 
-      // Convert base64 → Blob → File
-      const binary = atob(base64);
-      const len = binary.length;
-      const buffer = new Uint8Array(len);
-      for (let i = 0; i < len; i++) buffer[i] = binary.charCodeAt(i);
+      const byteString = atob(base64);
+      const byteArray = new Uint8Array(byteString.length);
+      for (let i = 0; i < byteString.length; i++) {
+        byteArray[i] = byteString.charCodeAt(i);
+      }
 
-      const blob = new Blob([buffer], { type: contentType });
-      const ext = contentType.split("/")[1] || "jpg";
-      const file = new File([blob], `imported.${ext}`, { type: contentType });
+      const blob = new Blob([byteArray], { type: mime });
+      const ext =
+        mime.split("/")[1] ||
+        (mime.includes("video") ? "mp4" : mime.includes("image") ? "jpg" : "");
+
+      const file = new File([blob], `imported.${ext}`, { type: mime });
 
       await handleUpload([file]);
-
       setImageUrl("");
     } catch (err) {
-      console.error(err);
-      alert("Failed to import link.");
-    } finally {
-      setIsImporting(false);
+      console.error("URL import error:", err);
+      alert("Import failed.");
+    }
+    setIsImporting(false);
+  }
+
+  /* -----------------------------------------------------------
+     DELETE ITEM
+  ----------------------------------------------------------- */
+  async function deleteItem(id: number) {
+    const ok = confirm("Delete this asset permanently? This cannot be undone.");
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/images/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("Failed to delete.");
+        return;
+      }
+      loadItems();
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert("Error deleting asset.");
     }
   }
 
-  // -------------------------------------------------------------
-  // RENDER
-  // -------------------------------------------------------------
+  /* -----------------------------------------------------------
+     RENDER
+  ----------------------------------------------------------- */
+
   return (
     <div className="flex flex-col gap-8">
 
-      {/* Upload section */}
+      {/* UPLOAD PANEL */}
       <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm space-y-6">
 
-        {/* Drag & Drop */}
+        {/* Drag area */}
         <div
-          className={`rounded-xl border-2 border-dashed p-8 text-center transition
-            ${
-              dragActive
-                ? "border-black bg-neutral-100"
-                : "border-neutral-300 bg-neutral-50"
-            }`}
+          className={`rounded-xl border-2 border-dashed p-8 text-center transition ${
+            dragActive
+              ? "border-black bg-neutral-100"
+              : "border-neutral-300 bg-neutral-50"
+          }`}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
-          <p className="text-sm font-medium mb-2">Drag & drop images here</p>
-          <p className="text-xs text-neutral-500">GIFs, PNG, JPG, WEBP — all supported</p>
+          <p className="text-sm font-medium mb-2">Drag & drop media here</p>
+          <p className="text-xs text-neutral-500">
+            Supports GIFs, MP4, MOV, JPG, PNG, WEBP…
+          </p>
 
           <div className="mt-4">
             <label className="cursor-pointer inline-block px-4 py-2 bg-black text-white text-xs rounded-lg hover:bg-neutral-800">
               Select files
               <input
                 type="file"
-                accept="image/*"
+                accept="image/*,video/*"
                 multiple
                 className="hidden"
                 onChange={(e) => e.target.files && handleUpload(e.target.files)}
@@ -201,30 +221,32 @@ export default function InspoGallery() {
           )}
         </div>
 
-        {/* URL Import */}
+        {/* URL IMPORT */}
         <div className="space-y-2">
           <p className="text-sm font-medium">Import from link</p>
-
           <div className="flex gap-2">
             <input
               value={imageUrl}
               onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://example.com/image.jpg"
+              placeholder="https://example.com/image-or-video"
               className="flex-1 border rounded-lg px-3 py-2 text-sm"
             />
-
             <button
-              onClick={importFromUrl}
               disabled={!imageUrl || isImporting}
+              onClick={importFromUrl}
               className="px-4 py-2 bg-black text-white text-xs rounded-lg disabled:opacity-40"
             >
               {isImporting ? "Importing…" : "Import"}
             </button>
           </div>
+          <p className="text-xs text-neutral-500">
+            Supports Cosmos, Pinterest, Instagram, and most media hosts.
+          </p>
         </div>
+
       </section>
 
-      {/* Gallery */}
+      {/* GALLERY */}
       <section>
         <h2 className="text-xs uppercase tracking-wide text-neutral-600 mb-4">
           Library ({items.length})
@@ -233,124 +255,136 @@ export default function InspoGallery() {
         {loading ? (
           <p className="text-sm text-neutral-500">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-neutral-500">No images yet.</p>
+          <p className="text-sm text-neutral-500">No media yet.</p>
         ) : (
           <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-            {items.map((img) => (
-              <button
-                key={img.id}
-                onClick={() => setSelected(img)}
-                className="group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition text-left"
+            {items.map((item) => (
+              <div
+                key={item.id}
+                className="relative group bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition"
               >
-                <div className="aspect-[4/3] bg-neutral-100 overflow-hidden">
-                  <img
-                    src={img.blobUrl}
-                    className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
-                  />
-                </div>
+                {/* DELETE BUTTON */}
+                <button
+                  onClick={() => deleteItem(item.id)}
+                  className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition bg-black/50 text-white text-xs px-2 py-1 rounded"
+                >
+                  Delete
+                </button>
 
-                <div className="p-3 space-y-1">
-                  <p className="text-xs font-medium text-neutral-700 truncate">
-                    {img.project || img.originalName}
-                  </p>
-
-                  {/* Top 3 style tags */}
-                  <div className="flex flex-wrap gap-1 text-[10px] text-neutral-500">
-                    {img.style_tags?.slice(0, 3).map((tag, i) => (
-                      <span
-                        key={i}
-                        className="px-2 py-0.5 bg-neutral-100 rounded-full"
-                      >
-                        {tag}
-                      </span>
-                    ))}
+                {/* MEDIA PREVIEW */}
+                <button
+                  className="w-full text-left"
+                  onClick={() => setSelected(item)}
+                >
+                  <div className="aspect-[4/3] bg-neutral-100 overflow-hidden">
+                    {/* VIDEO */}
+                    {item.isVideo ? (
+                      <video
+                        src={item.blobUrl}
+                        muted
+                        loop
+                        autoPlay
+                        playsInline
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // fallback to thumbnail
+                          const vid = e.currentTarget;
+                          if (item.thumbBlobUrl)
+                            vid.src = item.thumbBlobUrl;
+                        }}
+                      />
+                    ) : (
+                      // IMAGE OR GIF
+                      <img
+                        src={item.blobUrl}
+                        className="w-full h-full object-cover"
+                      />
+                    )}
                   </div>
 
-                  <p className="text-[10px] text-neutral-400">
-                    {new Date(img.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-              </button>
+                  {/* METADATA */}
+                  <div className="p-3 space-y-1">
+                    <p className="text-xs font-medium text-neutral-700 truncate">
+                      {item.project || item.originalName}
+                    </p>
+
+                    <div className="flex flex-wrap gap-1 text-[10px] text-neutral-500">
+                      {item.style_tags?.slice(0, 3).map((tag, i) => (
+                        <span
+                          key={i}
+                          className="px-2 py-0.5 bg-neutral-100 rounded-full"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+
+                    <p className="text-[10px] text-neutral-400">
+                      {new Date(item.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </button>
+              </div>
             ))}
           </div>
         )}
       </section>
 
-      {/* Modal */}
+      {/* MODAL */}
       {selected && (
         <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center p-6 z-50"
           onClick={() => setSelected(null)}
         >
           <div
-            className="bg-[#111] rounded-xl p-4 w-full max-w-4xl relative text-white"
+            className="bg-[#111] rounded-xl p-6 w-full max-w-4xl relative text-white overflow-auto max-h-[95vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              className="absolute right-3 top-3 bg-white/10 px-2 py-1 rounded text-xs"
+              className="absolute right-4 top-4 bg-white/10 px-3 py-1 rounded text-xs"
               onClick={() => setSelected(null)}
             >
               Close
             </button>
 
-            {/* Image (16:9 modal safe zone) */}
-            <div className="aspect-video bg-black rounded-xl overflow-hidden">
-              <img
-                src={selected.blobUrl}
-                className="w-full h-full object-contain"
-              />
+            {/* MEDIA */}
+            <div className="aspect-video bg-black rounded-xl overflow-hidden mb-4">
+              {selected.isVideo ? (
+                <video
+                  src={selected.blobUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <img
+                  src={selected.blobUrl}
+                  className="w-full h-full object-contain"
+                />
+              )}
             </div>
 
-            {/* Metadata */}
-            <div className="mt-4 space-y-3 text-xs text-neutral-300">
+            {/* METADATA */}
+            <div className="grid grid-cols-2 gap-6 text-xs">
+              <div>
+                <p className="font-medium text-sm text-white mb-2">
+                  {selected.originalName}
+                </p>
+                <p><span className="text-neutral-500">Project: </span>{selected.project || "—"}</p>
+                <p><span className="text-neutral-500">Medium: </span>{selected.medium}</p>
+                <p><span className="text-neutral-500">Use case: </span>{selected.use_case}</p>
+                <p><span className="text-neutral-500">Duration: </span>{selected.durationSeconds || 0}s</p>
+                <p><span className="text-neutral-500">Created: </span>{new Date(selected.created_at).toLocaleString()}</p>
+              </div>
 
-              <p className="text-white font-medium text-sm">
-                {selected.originalName}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Project: </span>
-                {selected.project || "—"}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Style tags: </span>
-                {selected.style_tags?.join(", ")}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Vibes: </span>
-                {selected.vibes?.join(", ")}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Color palette: </span>
-                {selected.color_palette?.join(", ")}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Medium: </span>
-                {selected.medium}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Use case: </span>
-                {selected.use_case}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Brand refs: </span>
-                {selected.brand_refs?.join(", ")}
-              </p>
-
-              <p>
-                <span className="text-neutral-500">Notes: </span>
-                {selected.notes}
-              </p>
-
-              <p className="text-neutral-500">
-                Created: {new Date(selected.created_at).toLocaleString()}
-              </p>
+              <div>
+                <p><span className="text-neutral-500">Style tags: </span>{selected.style_tags?.join(", ")}</p>
+                <p><span className="text-neutral-500">Vibes: </span>{selected.vibes?.join(", ")}</p>
+                <p><span className="text-neutral-500">Color palette: </span>{selected.color_palette?.join(", ")}</p>
+                <p><span className="text-neutral-500">Brand refs: </span>{selected.brand_refs?.join(", ")}</p>
+                <p><span className="text-neutral-500">Notes: </span>{selected.notes || "—"}</p>
+              </div>
             </div>
           </div>
         </div>
