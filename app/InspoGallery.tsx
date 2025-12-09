@@ -35,16 +35,30 @@ export default function InspoGallery() {
   const [isImporting, setIsImporting] = useState(false);
 
   /* -----------------------------------------------------------
-     LOAD ITEMS FROM /api/images
+     LOAD ITEMS FROM /api/images (robust against errors)
   ----------------------------------------------------------- */
   async function loadItems() {
     try {
       setLoading(true);
       const res = await fetch("/api/images");
+
+      if (!res.ok) {
+        console.error("Failed to load /api/images:", res.status);
+        setItems([]);
+        return;
+      }
+
       const data = await res.json();
-      setItems(data);
+
+      if (Array.isArray(data)) {
+        setItems(data);
+      } else {
+        console.error("Unexpected /api/images payload:", data);
+        setItems([]);
+      }
     } catch (e) {
       console.error("Error fetching images:", e);
+      setItems([]);
     } finally {
       setLoading(false);
     }
@@ -277,7 +291,6 @@ export default function InspoGallery() {
                   onClick={() => setSelected(item)}
                 >
                   <div className="aspect-[4/3] bg-neutral-100 overflow-hidden">
-                    {/* VIDEO */}
                     {item.isVideo ? (
                       <video
                         src={item.blobUrl}
@@ -287,14 +300,11 @@ export default function InspoGallery() {
                         playsInline
                         className="w-full h-full object-cover"
                         onError={(e) => {
-                          // fallback to thumbnail
                           const vid = e.currentTarget;
-                          if (item.thumbBlobUrl)
-                            vid.src = item.thumbBlobUrl;
+                          if (item.thumbBlobUrl) vid.src = item.thumbBlobUrl;
                         }}
                       />
                     ) : (
-                      // IMAGE OR GIF
                       <img
                         src={item.blobUrl}
                         className="w-full h-full object-cover"
@@ -302,7 +312,6 @@ export default function InspoGallery() {
                     )}
                   </div>
 
-                  {/* METADATA */}
                   <div className="p-3 space-y-1">
                     <p className="text-xs font-medium text-neutral-700 truncate">
                       {item.project || item.originalName}
@@ -347,7 +356,6 @@ export default function InspoGallery() {
               Close
             </button>
 
-            {/* MEDIA */}
             <div className="aspect-video bg-black rounded-xl overflow-hidden mb-4">
               {selected.isVideo ? (
                 <video
@@ -365,7 +373,6 @@ export default function InspoGallery() {
               )}
             </div>
 
-            {/* METADATA */}
             <div className="grid grid-cols-2 gap-6 text-xs">
               <div>
                 <p className="font-medium text-sm text-white mb-2">
