@@ -19,5 +19,11 @@
     "react-dom": "latest",
     "tailwindcss": "^3.4.1",
     "uuid": "^9.0.0"
-  }
+  },
+  "devDependencies": {
+  "typescript": "latest",
+  "@types/react": "latest",
+  "@types/node": "latest"
+}
+
 }
