@@ -7,7 +7,6 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { v4 as uuidv4 } from "uuid";
 
 type InspoItem = {
   id: string;
@@ -66,7 +65,7 @@ export default function InspoGallery() {
     reader.onload = () => {
       const src = reader.result as string;
       const newItem: InspoItem = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         src,
         fileName: file.name,
         mimeType: file.type,
