@@ -1,59 +1,58 @@
-import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { NextRequest, NextResponse } from "next/server";
+import { sql } from "@/lib/db";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
-export async function GET(req) {
-  const { searchParams } = new URL(req.url);
-  const q = searchParams.get('q');
-  const use_case = searchParams.get('use_case');
-  const style_tag = searchParams.get('style_tag');
+export async function GET(req: NextRequest) {
+  try {
+    const { rows } = await sql`
+      SELECT
+        id,
+        blob_url,
+        thumb_blob_url,
+        original_name,
+        project,
+        mime_type,
+        duration_seconds,
+        style_tags,
+        vibes,
+        color_palette,
+        medium,
+        use_case,
+        brand_refs,
+        notes,
+        created_at
+      FROM inspo_images
+      ORDER BY created_at DESC;
+    `;
 
-  const conditions = [];
-  const params = [];
+    // Normalize result for frontend
+    const mapped = rows.map((r) => ({
+      id: r.id,
+      blobUrl: r.blob_url,
+      thumbBlobUrl: r.thumb_blob_url,
+      originalName: r.original_name,
+      project: r.project,
+      mimeType: r.mime_type,
+      durationSeconds: r.duration_seconds,
+      style_tags: r.style_tags ?? [],
+      vibes: r.vibes ?? [],
+      color_palette: r.color_palette ?? [],
+      medium: r.medium,
+      use_case: r.use_case,
+      brand_refs: r.brand_refs ?? [],
+      notes: r.notes,
+      created_at: r.created_at,
+      isVideo: r.mime_type?.startsWith("video/") || false,
+      isGif: r.mime_type === "image/gif",
+    }));
 
-  if (q) {
-    conditions.push(
-      "(project ILIKE $1 OR notes ILIKE $1 OR original_name ILIKE $1 OR brand_refs::text ILIKE $1)"
+    return NextResponse.json(mapped);
+  } catch (err) {
+    console.error("GET /api/images error:", err);
+    return NextResponse.json(
+      { error: "Failed to load images" },
+      { status: 500 }
     );
-    params.push(`%${q}%`);
   }
-
-  if (use_case) {
-    conditions.push(`use_case = $${params.length + 1}`);
-    params.push(use_case);
-  }
-
-  if (style_tag) {
-    conditions.push(`style_tags::text ILIKE $${params.length + 1}`);
-    params.push(`%${style_tag}%`);
-  }
-
-  const where =
-    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const query = `
-    SELECT *
-    FROM inspo_images
-    ${where}
-    ORDER BY created_at DESC
-  `;
-
-  const { rows } = await sql.query(query, params);
-
-  const mapped = rows.map((r) => ({
-    id: r.id,
-    blobUrl: r.blob_url,
-    originalName: r.original_name,
-    project: r.project,
-    style_tags: r.style_tags || [],
-    vibes: r.vibes || [],
-    color_palette: r.color_palette || [],
-    medium: r.medium,
-    use_case: r.use_case,
-    brand_refs: r.brand_refs || [],
-    notes: r.notes,
-    created_at: r.created_at,
-  }));
-
-  return NextResponse.json(mapped);
 }
