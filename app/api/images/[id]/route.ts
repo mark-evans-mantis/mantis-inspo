@@ -6,19 +6,21 @@ export const dynamic = "force-dynamic";
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const id = Number(params.id);
-  if (!id) {
+  const { id } = await context.params; // Next 16 expects params as a Promise
+  const numericId = Number(id);
+
+  if (!numericId) {
     return NextResponse.json({ error: "Invalid ID" }, { status: 400 });
   }
 
   try {
-    // Load row
+    // Load row from DB
     const { rows } = await sql`
-      SELECT blob_url, thumb_blob_url 
-      FROM inspo_images 
-      WHERE id = ${id};
+      SELECT blob_url, thumb_blob_url
+      FROM inspo_images
+      WHERE id = ${numericId};
     `;
 
     if (rows.length === 0) {
@@ -27,23 +29,27 @@ export async function DELETE(
 
     const { blob_url, thumb_blob_url } = rows[0];
 
-    // Delete blobs (if exist)
+    // Delete blobs (ignore failures but log them)
     try {
-      if (blob_url) await del(blob_url);
+      if (blob_url) {
+        await del(blob_url);
+      }
     } catch (err) {
       console.warn("Failed to delete blob_url:", err);
     }
 
     try {
-      if (thumb_blob_url) await del(thumb_blob_url);
+      if (thumb_blob_url) {
+        await del(thumb_blob_url);
+      }
     } catch (err) {
       console.warn("Failed to delete thumb_blob_url:", err);
     }
 
     // Delete DB row
     await sql`
-      DELETE FROM inspo_images 
-      WHERE id = ${id};
+      DELETE FROM inspo_images
+      WHERE id = ${numericId};
     `;
 
     return NextResponse.json({ success: true });
