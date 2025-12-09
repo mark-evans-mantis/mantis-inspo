@@ -1,11 +1,12 @@
 import "./globals.css";
+import type { ReactNode } from "react";
 
 export const metadata = {
   title: "Mantis Inspo Library",
   description: "Internal inspiration gallery",
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-[#f5f5f5] text-neutral-900">
@@ -22,5 +23,6 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
+
 
 
