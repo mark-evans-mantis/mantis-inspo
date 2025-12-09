@@ -4,175 +4,166 @@ const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
   Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/*,video/*,*/*;q=0.8",
   "Accept-Language": "en-US,en;q=0.9",
   Connection: "keep-alive",
 };
 
-/* --------------------------------------------------------------------
-   FETCH ROUTE
--------------------------------------------------------------------- */
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
 
     if (!url || typeof url !== "string") {
-      return NextResponse.json({ error: "Missing URL" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
     }
 
-    // 1) Try direct image first
-    const direct = await tryDirectImageFetch(url);
+    // 1) Try direct fetch first
+    const direct = await tryDirectMediaFetch(url);
     if (direct) return NextResponse.json(direct);
 
-    // 2) Fetch HTML and extract all possible image URLs
+    // 2) Otherwise scrape the page
     const html = await fetchHtml(url);
     if (!html) {
-      return NextResponse.json(
-        { error: "Failed to load HTML page" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Failed to load HTML" }, { status: 400 });
     }
 
-    // 3) Extract images from HTML (img tags, meta tags, JSON, picture tags)
-    const candidates = extractImageCandidates(html, url);
+    const candidates = extractMediaCandidates(html, url);
 
     if (candidates.length === 0) {
-      return NextResponse.json(
-        { error: "No images found in HTML" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No media found on page" }, { status: 400 });
     }
 
-    // 4) Attempt to download each candidate and select the best one
+    // 3) Try each candidate
     for (const candidate of candidates) {
-      const fetched = await tryDirectImageFetch(candidate);
+      const fetched = await tryDirectMediaFetch(candidate);
       if (fetched) return NextResponse.json(fetched);
     }
 
     return NextResponse.json(
-      { error: "Found images but could not download them" },
+      { error: "Could not download media candidates" },
       { status: 400 }
     );
   } catch (err) {
     console.error("SCRAPER ERROR:", err);
-    return NextResponse.json(
-      { error: "Server error fetching image" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-/* --------------------------------------------------------------------
-   DIRECT IMAGE FETCH
--------------------------------------------------------------------- */
-async function tryDirectImageFetch(url: string) {
+/* -------------------------------------------------------
+   DIRECT MEDIA FETCH (image or video)
+------------------------------------------------------- */
+async function tryDirectMediaFetch(url: string) {
   try {
     const res = await fetch(url, {
       headers: BROWSER_HEADERS,
       redirect: "follow",
     });
 
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) return null;
+    const contentType = res.headers.get("content-type") ?? "";
 
-    const arrayBuf = await res.arrayBuffer();
-    const base64 = Buffer.from(arrayBuf).toString("base64");
+    // Accept all image & video formats
+    if (
+      contentType.startsWith("image/") ||
+      contentType.startsWith("video/") ||
+      url.match(/\.(mp4|mov|webm|gif|jpg|jpeg|png|webp|avif)$/i)
+    ) {
+      const arrayBuf = Buffer.from(await res.arrayBuffer());
+      const base64 = arrayBuf.toString("base64");
 
-    return { base64, contentType };
+      return {
+        base64,
+        contentType,
+      };
+    }
+
+    return null;
   } catch (err) {
     return null;
   }
 }
 
-/* --------------------------------------------------------------------
+/* -------------------------------------------------------
    FETCH HTML
--------------------------------------------------------------------- */
+------------------------------------------------------- */
 async function fetchHtml(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
       headers: BROWSER_HEADERS,
       redirect: "follow",
     });
-    if (!res.ok) return null;
 
+    if (!res.ok) return null;
     return await res.text();
   } catch {
     return null;
   }
 }
 
-/* --------------------------------------------------------------------
-   UNIVERSAL IMAGE EXTRACTION
--------------------------------------------------------------------- */
-function extractImageCandidates(html: string, baseUrl: string): string[] {
+/* -------------------------------------------------------
+   EXTRACT MEDIA CANDIDATES FROM HTML
+------------------------------------------------------- */
+function extractMediaCandidates(html: string, baseUrl: string): string[] {
   const urls = new Set<string>();
 
-  /* ---------------- IMG TAGS ---------------- */
-  const imgTagRegex = /<img[^>]+src=['"]([^'"]+)['"]/gi;
-  let imgMatch;
-  while ((imgMatch = imgTagRegex.exec(html)) !== null) {
-    urls.add(resolveUrl(imgMatch[1], baseUrl));
+  const resolve = (src: string) => {
+    try {
+      return new URL(src, baseUrl).toString();
+    } catch {
+      return src;
+    }
+  };
+
+  /* IMG tags */
+  const imgRegex = /<img[^>]+src=['"]([^'"]+)['"]/gi;
+  let m;
+  while ((m = imgRegex.exec(html))) {
+    urls.add(resolve(m[1]));
   }
 
-  /* ---------------- SRCSET ---------------- */
-  const srcsetRegex = /srcset=['"]([^'"]+)['"]/gi;
-  let srcsetMatch;
-  while ((srcsetMatch = srcsetRegex.exec(html)) !== null) {
-    const parts = srcsetMatch[1]
-      .split(",")
-      .map((p) => p.trim().split(" ")[0]);
-    parts.forEach((p) => urls.add(resolveUrl(p, baseUrl)));
+  /* VIDEO tags */
+  const videoRegex = /<video[^>]+src=['"]([^'"]+)['"]/gi;
+  while ((m = videoRegex.exec(html))) {
+    urls.add(resolve(m[1]));
   }
 
-  /* ---------------- OG:IMAGE META TAG ---------------- */
-  const ogImgRegex =
-    /<meta[^>]+property=['"]og:image['"][^>]+content=['"]([^'"]+)['"]/gi;
-  let ogMatch;
-  while ((ogMatch = ogImgRegex.exec(html)) !== null) {
-    urls.add(resolveUrl(ogMatch[1], baseUrl));
+  /* VIDEO <source> tags */
+  const srcRegex = /<source[^>]+src=['"]([^'"]+)['"]/gi;
+  while ((m = srcRegex.exec(html))) {
+    urls.add(resolve(m[1]));
   }
 
-  /* ---------------- TWITTER IMAGE META TAG ---------------- */
-  const twitterImgRegex =
-    /<meta[^>]+name=['"]twitter:image['"][^>]+content=['"]([^'"]+)['"]/gi;
-  let twMatch;
-  while ((twMatch = twitterImgRegex.exec(html)) !== null) {
-    urls.add(resolveUrl(twMatch[1], baseUrl));
+  /* og:image */
+  const ogImgRegex = /property=['"]og:image['"][^>]*content=['"]([^'"]+)['"]/gi;
+  while ((m = ogImgRegex.exec(html))) {
+    urls.add(resolve(m[1]));
   }
 
-  /* ---------------- LINK rel="image_src" ---------------- */
-  const linkImgRegex =
-    /<link[^>]+rel=['"]image_src['"][^>]+href=['"]([^'"]+)['"]/gi;
-  let linkMatch;
-  while ((linkMatch = linkImgRegex.exec(html)) !== null) {
-    urls.add(resolveUrl(linkMatch[1], baseUrl));
+  /* og:video */
+  const ogVidRegex = /property=['"]og:video['"][^>]*content=['"]([^'"]+)['"]/gi;
+  while ((m = ogVidRegex.exec(html))) {
+    urls.add(resolve(m[1]));
   }
 
-  /* ---------------- JSON EMBED SCRAPING (Pinterest, Cosmos, IG) ---------------- */
-  const scriptTagRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-  let scriptMatch;
-  while ((scriptMatch = scriptTagRegex.exec(html)) !== null) {
-    const content = scriptMatch[1];
+  /* twitter:image */
+  const twitterImgRegex = /name=['"]twitter:image['"][^>]*content=['"]([^'"]+)['"]/gi;
+  while ((m = twitterImgRegex.exec(html))) {
+    urls.add(resolve(m[1]));
+  }
 
-    // Extract any JSON-based embedded URLs
+  /* JSON embedded media (Pinterest, IG, Cosmos) */
+  const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+  let s;
+  while ((s = scriptRegex.exec(html))) {
+    const content = s[1];
+    if (!content) continue;
+
     const urlRegex =
-      /(https?:\/\/[^\s"'\\]+?\.(?:jpg|jpeg|png|gif|webp|avif))/gi;
+      /(https?:\/\/[^\s"'\\]+?\.(?:jpg|jpeg|png|gif|webp|mp4|mov|webm|m4v))/gi;
     let u;
-    while ((u = urlRegex.exec(content)) !== null) {
-      urls.add(resolveUrl(u[1], baseUrl));
+    while ((u = urlRegex.exec(content))) {
+      urls.add(resolve(u[1]));
     }
   }
 
   return Array.from(urls);
-}
-
-/* --------------------------------------------------------------------
-   RELATIVE URL HANDLING
--------------------------------------------------------------------- */
-function resolveUrl(found: string, base: string): string {
-  try {
-    return new URL(found, base).toString();
-  } catch {
-    return found;
-  }
 }
