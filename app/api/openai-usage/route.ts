@@ -3,11 +3,12 @@ import { NextResponse } from "next/server";
 export async function GET() {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
+
+    // If no API key, just return zero instead of erroring
     if (!apiKey) {
-      return NextResponse.json({ error: "Missing API key" }, { status: 500 });
+      return NextResponse.json({ total_usage_usd: 0 });
     }
 
-    // OpenAI usage endpoint (current month)
     const now = new Date();
     const startDate = new Date(now.getFullYear(), now.getMonth(), 1)
       .toISOString()
@@ -16,7 +17,7 @@ export async function GET() {
       .toISOString()
       .split("T")[0];
 
-    const url = `https://api.openai.com/v1/dashboard/billing/usage?start_date=${startDate}&end_date=${endDate}`;
+    const url = `https://api.openai.com/dashboard/billing/usage?start_date=${startDate}&end_date=${endDate}`;
 
     const res = await fetch(url, {
       headers: {
@@ -25,23 +26,17 @@ export async function GET() {
     });
 
     if (!res.ok) {
-      return NextResponse.json(
-        { error: "Failed to fetch OpenAI usage" },
-        { status: 500 }
-      );
+      console.warn("OpenAI usage fetch failed:", res.status);
+      return NextResponse.json({ total_usage_usd: 0 });
     }
 
     const data = await res.json();
+    const cents =
+      typeof data.total_usage === "number" ? data.total_usage : 0;
 
-    return NextResponse.json({
-      // API returns cents — convert to dollars
-      total_usage_usd: (data.total_usage ?? 0) / 100,
-    });
+    return NextResponse.json({ total_usage_usd: cents / 100 });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json(
-      { error: "Server error fetching OpenAI usage" },
-      { status: 500 }
-    );
+    console.error("openai-usage error:", err);
+    return NextResponse.json({ total_usage_usd: 0 });
   }
 }
