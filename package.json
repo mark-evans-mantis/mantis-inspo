@@ -18,12 +18,13 @@
     "react": "latest",
     "react-dom": "latest",
     "tailwindcss": "^3.4.1",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "fluent-ffmpeg": "latest",
+    "ffmpeg-static": "latest"
   },
   "devDependencies": {
-  "typescript": "latest",
-  "@types/react": "latest",
-  "@types/node": "latest"
-}
-
+    "typescript": "latest",
+    "@types/react": "latest",
+    "@types/node": "latest"
+  }
 }
