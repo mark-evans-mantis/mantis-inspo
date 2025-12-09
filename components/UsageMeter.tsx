@@ -20,7 +20,7 @@ export default function UsageMeter() {
         setUsage({
           remaining_usd: Number(json.remaining_usd ?? 0),
           total_granted_usd: Number(json.total_granted_usd ?? 0),
-          used_usd: Number(json.used_usd ?? 0),
+          used_usd: Number(json.used_usd ?? 0)
         });
       } catch (err) {
         console.error("Failed to load OpenAI usage:", err);
