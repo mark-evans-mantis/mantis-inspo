@@ -1,85 +1,40 @@
 import { NextResponse } from "next/server";
+import { sql } from "@/lib/db";
 
 export async function GET() {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    const budgetEnv =
-      process.env.OPENAI_BUDGET_USD ??
-      process.env.NEXT_PUBLIC_OPENAI_BUDGET_USD ??
-      "0";
-
-    const budgetUsd = Number(budgetEnv) || 0;
-
-    if (!apiKey) {
-      return NextResponse.json({
-        spent_usd: 0,
-        budget_usd: budgetUsd,
-        remaining_usd: budgetUsd,
-      });
-    }
-
-    // Current month range
+    // Start-of-month for precise monthly aggregation
     const now = new Date();
-    const startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-      .toISOString()
-      .split("T")[0];
-    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-      .toISOString()
-      .split("T")[0];
+    const startDate = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const url = `https://api.openai.com/v1/usage?start_date=${startDate}&end_date=${endDate}`;
+    // Query exact cost from our ledger table
+    const { rows } = await sql`
+      SELECT COALESCE(SUM(cost_usd), 0)::numeric AS spent
+      FROM openai_usage_logs
+      WHERE created_at >= ${startDate};
+    `;
 
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
+    // Exact USD spent so far (full precision)
+    const spent = Number(rows[0].spent) || 0;
 
-    if (!res.ok) {
-      console.warn("OpenAI /v1/usage failed:", res.status);
-      return NextResponse.json({
-        spent_usd: 0,
-        budget_usd: budgetUsd,
-        remaining_usd: budgetUsd,
-      });
-    }
+    // Your fixed monthly budget
+    const budget = 120;
 
-    const data = await res.json();
-
-    // Some versions of /v1/usage return total_usage in cents,
-    // plus per-day breakdown; handle both.
-    let spentUsd = 0;
-
-    if (typeof data.total_usage === "number") {
-      spentUsd = data.total_usage / 100;
-    } else if (Array.isArray(data.data)) {
-      const totalCents = data.data.reduce(
-        (sum: number, day: any) => sum + (day.total_usage ?? 0),
-        0
-      );
-      spentUsd = totalCents / 100;
-    }
-
-    const remainingUsd =
-      budgetUsd > 0 ? Math.max(budgetUsd - spentUsd, 0) : 0;
+    const remaining = Math.max(budget - spent, 0);
 
     return NextResponse.json({
-      spent_usd: spentUsd,
-      budget_usd: budgetUsd,
-      remaining_usd: remainingUsd,
+      spent_usd: spent,
+      budget_usd: budget,
+      remaining_usd: remaining,
     });
+
   } catch (err) {
     console.error("openai-usage error:", err);
-    const budgetEnv =
-      process.env.OPENAI_BUDGET_USD ??
-      process.env.NEXT_PUBLIC_OPENAI_BUDGET_USD ??
-      "0";
-    const budgetUsd = Number(budgetEnv) || 0;
 
     return NextResponse.json({
       spent_usd: 0,
-      budget_usd: budgetUsd,
-      remaining_usd: budgetUsd,
+      budget_usd: 120,
+      remaining_usd: 120,
     });
   }
 }
