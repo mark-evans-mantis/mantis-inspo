@@ -26,5 +26,6 @@
     "typescript": "latest",
     "@types/react": "latest",
     "@types/node": "latest"
+    "@types/fluent-ffmpeg": "latest"
   }
 }
