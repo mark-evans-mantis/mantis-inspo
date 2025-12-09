@@ -1,5 +1,6 @@
-import UsageMeter from "@/components/UsageMeter";
+import UsageMeter from "../components/UsageMeter";
 import InspoGallery from "./InspoGallery";
+
 
 export default function Page() {
   return (
