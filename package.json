@@ -1,6 +1,6 @@
 {
   "name": "mantis-inspo",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,11 +8,16 @@
     "start": "next start"
   },
   "dependencies": {
+    "@vercel/blob": "latest",
+    "@vercel/postgres": "latest",
     "autoprefixer": "^10.4.15",
     "next": "latest",
+    "openai": "latest",
+    "pg": "latest",
     "postcss": "^8.4.27",
     "react": "latest",
     "react-dom": "latest",
-    "tailwindcss": "^3.4.1"
+    "tailwindcss": "^3.4.1",
+    "uuid": "^9.0.0"
   }
 }
