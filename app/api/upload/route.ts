@@ -3,73 +3,11 @@ import { sql } from "@/lib/db";
 import { put } from "@vercel/blob";
 import OpenAI from "openai";
 
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegStatic from "ffmpeg-static";
-
-export const runtime = "nodejs"; // Required for FFmpeg
+export const runtime = "nodejs"; // fine to keep, but not required now
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-
-// Very simple brightness heuristic if we ever inspect frames in detail
-function isFrameBlack(pixels: Uint8Array, threshold = 18) {
-  for (let i = 0; i < pixels.length; i += 3) {
-    const r = pixels[i];
-    const g = pixels[i + 1];
-    const b = pixels[i + 2];
-    if (r > threshold || g > threshold || b > threshold) return false;
-  }
-  return true;
-}
-
-// Extract a thumbnail frame and duration from a video/GIF buffer
-// NOTE: buffer is typed as any to satisfy fluent-ffmpeg's input types in TS.
-async function extractThumbnail(buffer: any): Promise<{ thumb: Buffer; duration: number }> {
-  return new Promise((resolve, reject) => {
-    const frames: Buffer[] = [];
-    let finalFrame: Buffer | null = null;
-    let duration = 0;
-
-    ffmpeg()
-      .setFfmpegPath(ffmpegStatic as string)
-      .input(buffer as any)
-      .outputOptions([
-        "-vf",
-        "fps=3", // sample ~3 frames per second
-        "-vframes",
-        "50", // cap number of frames
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-      ])
-      .on("codecData", (data) => {
-        // duration like "00:00:03.45"
-        const parts = data.duration.split(":").map(Number);
-        if (parts.length === 3) {
-          duration = parts[0] * 3600 + parts[1] * 60 + parts[2];
-        }
-      })
-      .on("error", (err) => {
-        reject(err);
-      })
-      .on("end", () => {
-        // crude: choose the first frame we captured
-        if (frames.length > 0) {
-          finalFrame = frames[0];
-        }
-        if (!finalFrame) {
-          return reject("No usable frame found");
-        }
-        resolve({ thumb: finalFrame, duration });
-      })
-      .pipe()
-      .on("data", (chunk: Buffer) => {
-        frames.push(chunk);
-      });
-  });
-}
 
 async function analyzeWithOpenAI(imageUrl: string) {
   const ANALYSIS_PROMPT = `
@@ -100,32 +38,32 @@ The JSON must have these fields:
 Output ONLY valid JSON.
 `;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4.1-mini",
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: ANALYSIS_PROMPT },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Analyze this image and respond with JSON only.",
-          },
-          {
-            type: "image_url",
-            image_url: { url: imageUrl },
-          },
-        ],
-      },
-    ],
-  });
-
-  const text = completion.choices[0]?.message?.content || "{}";
   try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: ANALYSIS_PROMPT },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Analyze this image and respond with JSON only.",
+            },
+            {
+              type: "image_url",
+              image_url: { url: imageUrl },
+            },
+          ],
+        },
+      ],
+    });
+
+    const text = completion.choices[0]?.message?.content || "{}";
     return JSON.parse(text);
-  } catch {
-    console.error("OpenAI returned non-JSON:", text);
+  } catch (err) {
+    console.error("OpenAI analysis failed:", err);
     return {};
   }
 }
@@ -140,13 +78,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const mime = file.type;
+    const mime = file.type || "application/octet-stream";
     const originalName = file.name || "upload";
-    const arrayBuf = Buffer.from(await file.arrayBuffer());
+    const buffer = Buffer.from(await file.arrayBuffer());
 
     // 1. Upload original file to Blob
     const uniqueName = `${Date.now()}-${originalName}`;
-    const blobUpload = await put(uniqueName, arrayBuf, {
+    const blobUpload = await put(uniqueName, buffer, {
       access: "public",
       contentType: mime,
     });
@@ -155,40 +93,30 @@ export async function POST(req: NextRequest) {
     let durationSeconds: number | null = null;
     let analysis: any = {};
 
-    const isVideo = mime.startsWith("video/");
+    const isImage = mime.startsWith("image/");
     const isGif = mime === "image/gif";
+    const isVideo = mime.startsWith("video/");
 
-    if (isVideo || isGif) {
-      // Extract thumbnail frame + duration
-      const { thumb, duration } = await extractThumbnail(arrayBuf);
-      durationSeconds = Math.round(duration);
-
-      // Upload thumbnail
-      const thumbName = `${Date.now()}-thumb-${originalName.replace(/\.[^/.]+$/, "")}.jpg`;
-      const thumbUpload = await put(thumbName, thumb, {
-        access: "public",
-        contentType: "image/jpeg",
-      });
-      thumbBlobUrl = thumbUpload.url;
-
-      // Analyze thumbnail with OpenAI
-      analysis = await analyzeWithOpenAI(thumbBlobUrl);
-    } else {
-      // Direct image analysis
+    // 2. Analysis logic:
+    // - For images (including GIFs): analyze via OpenAI
+    // - For videos: skip analysis for now (we still store them & display autoplay)
+    if (isImage || isGif) {
       analysis = await analyzeWithOpenAI(blobUpload.url);
+    } else if (isVideo) {
+      analysis = {}; // no analysis yet for video
     }
 
     const {
       style_tags = [],
       vibes = [],
       color_palette = [],
-      medium = null,
+      medium = isVideo ? "video" : null,
       use_case = null,
       brand_references = [],
       notes = null,
     } = analysis || {};
 
-    // 2. Save into Postgres
+    // 3. Insert into Postgres
     const result = await sql`
       INSERT INTO inspo_images (
         blob_url,
