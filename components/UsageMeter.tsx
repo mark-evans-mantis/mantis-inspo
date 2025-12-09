@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 
 type UsageResponse = {
+  spent_usd: number;
+  budget_usd: number;
   remaining_usd: number;
-  total_granted_usd: number;
-  used_usd: number;
 };
 
 export default function UsageMeter() {
@@ -18,13 +18,13 @@ export default function UsageMeter() {
         const res = await fetch("/api/openai-usage");
         const json = await res.json();
         setUsage({
+          spent_usd: Number(json.spent_usd ?? 0),
+          budget_usd: Number(json.budget_usd ?? 0),
           remaining_usd: Number(json.remaining_usd ?? 0),
-          total_granted_usd: Number(json.total_granted_usd ?? 0),
-          used_usd: Number(json.used_usd ?? 0)
         });
       } catch (err) {
         console.error("Failed to load OpenAI usage:", err);
-        setUsage({ remaining_usd: 0, total_granted_usd: 0, used_usd: 0 });
+        setUsage({ spent_usd: 0, budget_usd: 0, remaining_usd: 0 });
       } finally {
         setLoading(false);
       }
@@ -32,18 +32,23 @@ export default function UsageMeter() {
     load();
   }, []);
 
+  const spent = usage?.spent_usd ?? 0;
+  const budget = usage?.budget_usd ?? 0;
   const remaining = usage?.remaining_usd ?? 0;
-  const total = usage?.total_granted_usd ?? 0;
 
   const pct =
-    total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0;
+    budget > 0 ? Math.min(100, Math.max(0, (remaining / budget) * 100)) : 0;
 
-  const label =
-    total > 0
-      ? `$${remaining.toFixed(2)} remaining / $${total.toFixed(2)}`
-      : loading
-      ? "Loading…"
-      : "No credit data";
+  let label: string;
+  if (loading) {
+    label = "Loading…";
+  } else if (budget > 0) {
+    label = `$${remaining.toFixed(2)} remaining / $${budget.toFixed(
+      2
+    )} (spent $${spent.toFixed(2)})`;
+  } else {
+    label = `Spent this month: $${spent.toFixed(2)}`;
+  }
 
   return (
     <div className="inline-flex items-center gap-3 rounded-xl border border-neutral-200 bg-white/70 px-3 py-2 text-xs shadow-sm backdrop-blur">
