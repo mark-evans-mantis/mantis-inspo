@@ -3,7 +3,7 @@ import { sql } from "@/lib/db";
 import { put } from "@vercel/blob";
 import OpenAI from "openai";
 
-export const runtime = "nodejs"; // fine to keep, but not required now
+export const runtime = "nodejs"; // ok to keep, even though no FFmpeg now
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -72,6 +72,8 @@ export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
     const file = form.get("image") as File | null;
+    const thumbFile = form.get("thumb") as File | null;
+    const durationField = form.get("duration") as string | null;
     const project = (form.get("project") as string) || "";
 
     if (!file) {
@@ -93,17 +95,40 @@ export async function POST(req: NextRequest) {
     let durationSeconds: number | null = null;
     let analysis: any = {};
 
-    const isImage = mime.startsWith("image/");
-    const isGif = mime === "image/gif";
     const isVideo = mime.startsWith("video/");
+    const isImage = mime.startsWith("image/");
 
-    // 2. Analysis logic:
-    // - For images (including GIFs): analyze via OpenAI
-    // - For videos: skip analysis for now (we still store them & display autoplay)
-    if (isImage || isGif) {
+    // 2. If client provided a thumbnail, upload it
+    if (thumbFile) {
+      const thumbBuffer = Buffer.from(await thumbFile.arrayBuffer());
+      const thumbName = `${Date.now()}-thumb-${originalName.replace(
+        /\.[^/.]+$/,
+        ""
+      )}.jpg`;
+      const thumbUpload = await put(thumbName, thumbBuffer, {
+        access: "public",
+        contentType: thumbFile.type || "image/jpeg",
+      });
+      thumbBlobUrl = thumbUpload.url;
+    }
+
+    if (durationField) {
+      const n = Number(durationField);
+      if (!Number.isNaN(n)) {
+        durationSeconds = n;
+      }
+    }
+
+    // 3. Decide what to send to OpenAI
+    if (isImage && !isVideo) {
+      // Images (including GIFs) → analyze original
       analysis = await analyzeWithOpenAI(blobUpload.url);
-    } else if (isVideo) {
-      analysis = {}; // no analysis yet for video
+    } else if (isVideo && thumbBlobUrl) {
+      // Videos → analyze thumbnail
+      analysis = await analyzeWithOpenAI(thumbBlobUrl);
+    } else {
+      // Video with no thumbnail or unsupported media → no analysis
+      analysis = {};
     }
 
     const {
@@ -116,7 +141,7 @@ export async function POST(req: NextRequest) {
       notes = null,
     } = analysis || {};
 
-    // 3. Insert into Postgres
+    // 4. Insert into Postgres
     const result = await sql`
       INSERT INTO inspo_images (
         blob_url,
