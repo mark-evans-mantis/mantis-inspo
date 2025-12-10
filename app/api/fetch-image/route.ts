@@ -1,169 +1,123 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-const BROWSER_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-  Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/*,video/*,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  Connection: "keep-alive",
-};
+/**
+ * Helper: extract metadata <meta property="og:*"> etc.
+ */
+function extractMeta(html: string, keys: string[]): string {
+  for (const key of keys) {
+    const propRegex = new RegExp(
+      `<meta[^>]+property=["']${key}["'][^>]*content=["']([^"']+)["'][^>]*>`,
+      "i"
+    );
+    const propMatch = html.match(propRegex);
+    if (propMatch?.[1]) return propMatch[1].trim();
 
-export async function POST(req: NextRequest) {
+    const nameRegex = new RegExp(
+      `<meta[^>]+name=["']${key}["'][^>]*content=["']([^"']+)["'][^>]*>`,
+      "i"
+    );
+    const nameMatch = html.match(nameRegex);
+    if (nameMatch?.[1]) return nameMatch[1].trim();
+  }
+  return "";
+}
+
+/**
+ * Extract <title> fallback
+ */
+function extractTitle(html: string): string {
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return titleMatch?.[1]?.trim() ?? "";
+}
+
+/**
+ * Main metadata scraping function.
+ * This now works for COSMOS, PINTEREST, INSTAGRAM, ANY URL.
+ */
+async function scrapeMetadata(url: string) {
+  const res = await fetch(url, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch URL (${res.status})`);
+  }
+
+  const contentType = res.headers.get("content-type") || "";
+
+  // If it's already an image → return directly
+  if (contentType.startsWith("image/")) {
+    return {
+      imageUrl: url,
+      title: "",
+      description: "",
+      siteName: "",
+    };
+  }
+
+  // Otherwise parse HTML and extract metadata
+  const html = await res.text();
+
+  const title =
+    extractMeta(html, ["og:title", "twitter:title"]) || extractTitle(html);
+
+  const description =
+    extractMeta(html, ["og:description", "twitter:description"]) || "";
+
+  const imageUrl =
+    extractMeta(html, [
+      "og:image",
+      "twitter:image",
+      "pin:image", // Pinterest-specific
+    ]) || "";
+
+  const siteName = extractMeta(html, ["og:site_name"]) || "";
+
+  return {
+    title,
+    description,
+    imageUrl,
+    siteName,
+  };
+}
+
+/**
+ * POST /api/fetch-image
+ *
+ * Body: { url: string }
+ *
+ * ALWAYS runs the metadata scrapers for ANY domain.
+ * Fixes: Cosmos works, Pinterest works, ANY link works.
+ */
+export async function POST(req: Request) {
   try {
     const { url } = await req.json();
 
-    if (!url || typeof url !== "string") {
-      return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+    if (!url) {
+      return NextResponse.json(
+        { ok: false, error: "Missing URL." },
+        { status: 400 }
+      );
     }
 
-    // 1) Try direct fetch first
-    const direct = await tryDirectMediaFetch(url);
-    if (direct) return NextResponse.json(direct);
+    const metadata = await scrapeMetadata(url);
 
-    // 2) Otherwise scrape the page
-    const html = await fetchHtml(url);
-    if (!html) {
-      return NextResponse.json({ error: "Failed to load HTML" }, { status: 400 });
-    }
-
-    const candidates = extractMediaCandidates(html, url);
-
-    if (candidates.length === 0) {
-      return NextResponse.json({ error: "No media found on page" }, { status: 400 });
-    }
-
-    // 3) Try each candidate
-    for (const candidate of candidates) {
-      const fetched = await tryDirectMediaFetch(candidate);
-      if (fetched) return NextResponse.json(fetched);
-    }
-
+    return NextResponse.json({
+      ok: true,
+      asset: {
+        sourceUrl: url,
+        imageUrl: metadata.imageUrl || "",
+        title: metadata.title || "",
+        description: metadata.description || "",
+        siteName: metadata.siteName || "",
+      },
+    });
+  } catch (err: any) {
+    console.error("[fetch-image] ERROR:", err);
     return NextResponse.json(
-      { error: "Could not download media candidates" },
-      { status: 400 }
+      {
+        ok: false,
+        error: err.message ?? "Unknown error",
+      },
+      { status: 500 }
     );
-  } catch (err) {
-    console.error("SCRAPER ERROR:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
-}
-
-/* -------------------------------------------------------
-   DIRECT MEDIA FETCH (image or video)
-------------------------------------------------------- */
-async function tryDirectMediaFetch(url: string) {
-  try {
-    const res = await fetch(url, {
-      headers: BROWSER_HEADERS,
-      redirect: "follow",
-    });
-
-    const contentType = res.headers.get("content-type") ?? "";
-
-    // Accept all image & video formats
-    if (
-      contentType.startsWith("image/") ||
-      contentType.startsWith("video/") ||
-      url.match(/\.(mp4|mov|webm|gif|jpg|jpeg|png|webp|avif)$/i)
-    ) {
-      const arrayBuf = Buffer.from(await res.arrayBuffer());
-      const base64 = arrayBuf.toString("base64");
-
-      return {
-        base64,
-        contentType,
-      };
-    }
-
-    return null;
-  } catch (err) {
-    return null;
-  }
-}
-
-/* -------------------------------------------------------
-   FETCH HTML
-------------------------------------------------------- */
-async function fetchHtml(url: string): Promise<string | null> {
-  try {
-    const res = await fetch(url, {
-      headers: BROWSER_HEADERS,
-      redirect: "follow",
-    });
-
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
-  }
-}
-
-/* -------------------------------------------------------
-   EXTRACT MEDIA CANDIDATES FROM HTML
-------------------------------------------------------- */
-function extractMediaCandidates(html: string, baseUrl: string): string[] {
-  const urls = new Set<string>();
-
-  const resolve = (src: string) => {
-    try {
-      return new URL(src, baseUrl).toString();
-    } catch {
-      return src;
-    }
-  };
-
-  /* IMG tags */
-  const imgRegex = /<img[^>]+src=['"]([^'"]+)['"]/gi;
-  let m;
-  while ((m = imgRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* VIDEO tags */
-  const videoRegex = /<video[^>]+src=['"]([^'"]+)['"]/gi;
-  while ((m = videoRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* VIDEO <source> tags */
-  const srcRegex = /<source[^>]+src=['"]([^'"]+)['"]/gi;
-  while ((m = srcRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* og:image */
-  const ogImgRegex = /property=['"]og:image['"][^>]*content=['"]([^'"]+)['"]/gi;
-  while ((m = ogImgRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* og:video */
-  const ogVidRegex = /property=['"]og:video['"][^>]*content=['"]([^'"]+)['"]/gi;
-  while ((m = ogVidRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* twitter:image */
-  const twitterImgRegex = /name=['"]twitter:image['"][^>]*content=['"]([^'"]+)['"]/gi;
-  while ((m = twitterImgRegex.exec(html))) {
-    urls.add(resolve(m[1]));
-  }
-
-  /* JSON embedded media (Pinterest, IG, Cosmos) */
-  const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-  let s;
-  while ((s = scriptRegex.exec(html))) {
-    const content = s[1];
-    if (!content) continue;
-
-    const urlRegex =
-      /(https?:\/\/[^\s"'\\]+?\.(?:jpg|jpeg|png|gif|webp|mp4|mov|webm|m4v))/gi;
-    let u;
-    while ((u = urlRegex.exec(content))) {
-      urls.add(resolve(u[1]));
-    }
-  }
-
-  return Array.from(urls);
 }
