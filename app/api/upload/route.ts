@@ -22,12 +22,9 @@ export async function POST(req: Request) {
       access: "public",
     });
 
-    // Detect MIME type
     const mime = file.type || "";
 
-    // ---------------------------------------------------
-    // Optional: Extract video duration
-    // ---------------------------------------------------
+    // Extract video duration for videos
     let durationSeconds: number | null = null;
 
     if (mime.startsWith("video/")) {
@@ -45,9 +42,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // ---------------------------------------------------
-    // Auto metadata scraping (title, description, siteName)
-    // ---------------------------------------------------
+    // Metadata scraping
     let scraped = { title: "", description: "", siteName: "" };
 
     try {
@@ -56,9 +51,7 @@ export async function POST(req: Request) {
       console.warn("Metadata scrape failed:", e);
     }
 
-    // ---------------------------------------------------
-    // Insert into Postgres with correct array types
-    // ---------------------------------------------------
+    // Insert row into Postgres
     const { rows } = await sql`
       INSERT INTO inspo_images (
         blob_url,
@@ -78,14 +71,14 @@ export async function POST(req: Request) {
         ${file.name},
         ${mime},
         ${durationSeconds},
-        ${scraped.title || null},      -- project
-        ${null},                       -- medium
-        ${null},                       -- use_case
-        ${sql.array([], "text")},      -- style_tags
-        ${sql.array([], "text")},      -- vibes
-        ${sql.array([], "text")},      -- color_palette
-        ${sql.array([], "text")},      -- brand_refs
-        ${scraped.description || null} -- notes
+        ${scraped.title || null},         -- project
+        ${null},                          -- medium
+        ${null},                          -- use_case
+        ${sql`ARRAY[]::text[]`},          -- style_tags
+        ${sql`ARRAY[]::text[]`},          -- vibes
+        ${sql`ARRAY[]::text[]`},          -- color_palette
+        ${sql`ARRAY[]::text[]`},          -- brand_refs
+        ${scraped.description || null}    -- notes
       )
       RETURNING *;
     `;
