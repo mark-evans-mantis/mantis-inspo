@@ -5,18 +5,18 @@ const client = new OpenAI({
 });
 
 /**
- * Uses GPT-4.1 Vision to extract structured metadata from an uploaded image.
+ * Full AI metadata extraction using GPT-4.1 Vision (Responses API)
  */
 export async function generateAIMetadata(imageUrl: string) {
   try {
-    const result = await client.responses.create({
+    const response = await client.responses.create({
       model: "gpt-4.1",
       input: [
         {
           role: "system",
           content: [
             {
-              type: "text",
+              type: "input_text",
               text: `
 You analyze images and output metadata for a creative inspiration library.
 Return ONLY a strict JSON object with these keys:
@@ -33,9 +33,9 @@ Return ONLY a strict JSON object with these keys:
 }
 
 Rules:
-- Keep strings short.
-- Never mention GPT or analysis steps.
-- If unsure: null or [].
+- Keep answers short and clean.
+- If unsure, return null or empty array.
+- Do NOT mention GPT or internal reasoning.
 `
             }
           ]
@@ -43,17 +43,24 @@ Rules:
         {
           role: "user",
           content: [
-            { type: "text", text: "Extract structured creative metadata for this image." },
-            { type: "input_image", image_url: imageUrl }
+            {
+              type: "input_text",
+              text: "Extract structured creative metadata for this image."
+            },
+            {
+              type: "input_image",
+              image_url: imageUrl,
+              detail: "auto"
+            }
           ]
         }
       ],
-      max_output_tokens: 1000,
+      max_output_tokens: 800,
       temperature: 0.2
     });
 
-    const output = result.output_text;
-    const parsed = JSON.parse(output);
+    const jsonText = response.output_text;
+    const parsed = JSON.parse(jsonText);
 
     return {
       project: parsed.project ?? null,
