@@ -15,34 +15,34 @@ export async function POST(req: Request) {
       );
     }
 
-    // Upload file to Blob
+    // Upload file to Vercel Blob
     const blobRes = await put(`uploads/${Date.now()}-${file.name}`, file, {
       access: "public"
     });
 
     const mime = file.type || "";
 
-    // Extract video duration
+    // Optional: video duration handling
     let durationSeconds: number | null = null;
-    if (mime.startsWith("video/")) {
-      const buf = await file.arrayBuffer();
-      const videoBlob = new Blob([buf], { type: mime });
-      const url = URL.createObjectURL(videoBlob);
 
+    if (mime.startsWith("video/")) {
+      const buffer = await file.arrayBuffer();
+      const blob = new Blob([buffer], { type: mime });
+      const url = URL.createObjectURL(blob);
       durationSeconds = await new Promise((resolve) => {
-        const v = document.createElement("video");
-        v.src = url;
-        v.addEventListener("loadedmetadata", () => {
-          resolve(v.duration || null);
+        const video = document.createElement("video");
+        video.src = url;
+        video.addEventListener("loadedmetadata", () => {
+          resolve(video.duration || null);
           URL.revokeObjectURL(url);
         });
       });
     }
 
-    // RUN AI METADATA (GPT-4.1 Vision)
+    // ⭐ RUN AI METADATA (GPT-4.1 Vision)
     const metadata = await generateAIMetadata(blobRes.url);
 
-    // Insert into Postgres
+    // Insert into database
     const { rows } = await sql`
       INSERT INTO inspo_images (
         blob_url,
@@ -57,8 +57,7 @@ export async function POST(req: Request) {
         color_palette,
         brand_refs,
         notes
-      )
-      VALUES (
+      ) VALUES (
         ${blobRes.url},
         ${file.name},
         ${mime},
@@ -75,9 +74,9 @@ export async function POST(req: Request) {
       RETURNING *;
     `;
 
-    return NextResponse.json({ ok: true, image: rows[0] });
+    return NextResponse.json(rows[0]);
   } catch (err: any) {
-    console.error("[UPLOAD ERROR]:", err);
+    console.error("UPLOAD ERROR:", err);
     return NextResponse.json(
       { ok: false, error: err.message ?? "Unknown error" },
       { status: 500 }
