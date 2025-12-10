@@ -71,14 +71,14 @@ export async function POST(req: Request) {
         ${file.name},
         ${mime},
         ${durationSeconds},
-        ${scraped.title || null},         -- project
-        ${null},                          -- medium
-        ${null},                          -- use_case
-        ${sql`ARRAY[]::text[]`},          -- style_tags
-        ${sql`ARRAY[]::text[]`},          -- vibes
-        ${sql`ARRAY[]::text[]`},          -- color_palette
-        ${sql`ARRAY[]::text[]`},          -- brand_refs
-        ${scraped.description || null}    -- notes
+        ${scraped.title || null},      -- project
+        ${null},                       -- medium
+        ${null},                       -- use_case
+        ${'{}'},                       -- style_tags
+        ${'{}'},                       -- vibes
+        ${'{}'},                       -- color_palette
+        ${'{}'},                       -- brand_refs
+        ${scraped.description || null} -- notes
       )
       RETURNING *;
     `;
@@ -92,3 +92,4 @@ export async function POST(req: Request) {
     );
   }
 }
+
