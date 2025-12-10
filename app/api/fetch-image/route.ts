@@ -1,122 +1,76 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Helper: extract metadata <meta property="og:*"> etc.
+ * Shared metadata scraper.
+ * Works for both import-link and uploads.
  */
-function extractMeta(html: string, keys: string[]): string {
-  for (const key of keys) {
-    const propRegex = new RegExp(
-      `<meta[^>]+property=["']${key}["'][^>]*content=["']([^"']+)["'][^>]*>`,
-      "i"
-    );
-    const propMatch = html.match(propRegex);
-    if (propMatch?.[1]) return propMatch[1].trim();
+export async function scrapeMetadata(url: string) {
+  try {
+    const res = await fetch(url, { method: "GET" });
 
-    const nameRegex = new RegExp(
-      `<meta[^>]+name=["']${key}["'][^>]*content=["']([^"']+)["'][^>]*>`,
-      "i"
-    );
-    const nameMatch = html.match(nameRegex);
-    if (nameMatch?.[1]) return nameMatch[1].trim();
-  }
-  return "";
-}
+    // Fallback if URL is an image or non-HTML
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/html")) {
+      return {
+        title: "",
+        description: "",
+        siteName: "",
+      };
+    }
 
-/**
- * Extract <title> fallback
- */
-function extractTitle(html: string): string {
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  return titleMatch?.[1]?.trim() ?? "";
-}
+    const html = await res.text();
 
-/**
- * Main metadata scraping function.
- * This now works for COSMOS, PINTEREST, INSTAGRAM, ANY URL.
- */
-async function scrapeMetadata(url: string) {
-  const res = await fetch(url, { cache: "no-store" });
+    // Extract <meta> tags
+    const title =
+      matchMeta(html, "property", "og:title") ||
+      matchMeta(html, "name", "title") ||
+      "";
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch URL (${res.status})`);
-  }
+    const description =
+      matchMeta(html, "property", "og:description") ||
+      matchMeta(html, "name", "description") ||
+      "";
 
-  const contentType = res.headers.get("content-type") || "";
+    const siteName =
+      matchMeta(html, "property", "og:site_name") ||
+      "";
 
-  // If it's already an image → return directly
-  if (contentType.startsWith("image/")) {
     return {
-      imageUrl: url,
+      title,
+      description,
+      siteName,
+    };
+  } catch (err) {
+    console.warn("scrapeMetadata error:", err);
+    return {
       title: "",
       description: "",
       siteName: "",
     };
   }
+}
 
-  // Otherwise parse HTML and extract metadata
-  const html = await res.text();
-
-  const title =
-    extractMeta(html, ["og:title", "twitter:title"]) || extractTitle(html);
-
-  const description =
-    extractMeta(html, ["og:description", "twitter:description"]) || "";
-
-  const imageUrl =
-    extractMeta(html, [
-      "og:image",
-      "twitter:image",
-      "pin:image", // Pinterest-specific
-    ]) || "";
-
-  const siteName = extractMeta(html, ["og:site_name"]) || "";
-
-  return {
-    title,
-    description,
-    imageUrl,
-    siteName,
-  };
+// Small helper to read meta tags
+function matchMeta(html: string, attr: string, value: string) {
+  const regex = new RegExp(
+    `<meta[^>]*${attr}=["']${value}["'][^>]*content=["']([^"']+)["']`,
+    "i"
+  );
+  const match = html.match(regex);
+  return match ? match[1] : null;
 }
 
 /**
- * POST /api/fetch-image
- *
- * Body: { url: string }
- *
- * ALWAYS runs the metadata scrapers for ANY domain.
- * Fixes: Cosmos works, Pinterest works, ANY link works.
+ * Default API route — this runs when frontend calls /api/fetch-image
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
-
-    if (!url) {
-      return NextResponse.json(
-        { ok: false, error: "Missing URL." },
-        { status: 400 }
-      );
-    }
-
     const metadata = await scrapeMetadata(url);
-
-    return NextResponse.json({
-      ok: true,
-      asset: {
-        sourceUrl: url,
-        imageUrl: metadata.imageUrl || "",
-        title: metadata.title || "",
-        description: metadata.description || "",
-        siteName: metadata.siteName || "",
-      },
-    });
+    return NextResponse.json({ ok: true, metadata });
   } catch (err: any) {
-    console.error("[fetch-image] ERROR:", err);
     return NextResponse.json(
-      {
-        ok: false,
-        error: err.message ?? "Unknown error",
-      },
+      { ok: false, error: err.message ?? "Unknown error" },
       { status: 500 }
     );
   }
