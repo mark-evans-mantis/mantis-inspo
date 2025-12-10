@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { put } from "@vercel/blob";
-
-// Import shared metadata scraper from fetch-image
-import { scrapeMetadata } from "@/app/api/fetch-image/route";
+import { generateAIMetadata } from "@/lib/aiMetadata";
 
 export async function POST(req: Request) {
   try {
@@ -17,41 +15,34 @@ export async function POST(req: Request) {
       );
     }
 
-    // Upload file to Vercel Blob
+    // Upload file to Blob
     const blobRes = await put(`uploads/${Date.now()}-${file.name}`, file, {
-      access: "public",
+      access: "public"
     });
 
     const mime = file.type || "";
 
-    // Extract video duration for videos
+    // Extract video duration
     let durationSeconds: number | null = null;
-
     if (mime.startsWith("video/")) {
-      const arrayBuffer = await file.arrayBuffer();
-      const videoBlob = new Blob([arrayBuffer], { type: mime });
-      const videoUrl = URL.createObjectURL(videoBlob);
+      const buf = await file.arrayBuffer();
+      const videoBlob = new Blob([buf], { type: mime });
+      const url = URL.createObjectURL(videoBlob);
 
       durationSeconds = await new Promise((resolve) => {
-        const video = document.createElement("video");
-        video.src = videoUrl;
-        video.addEventListener("loadedmetadata", () => {
-          resolve(video.duration || null);
-          URL.revokeObjectURL(videoUrl);
+        const v = document.createElement("video");
+        v.src = url;
+        v.addEventListener("loadedmetadata", () => {
+          resolve(v.duration || null);
+          URL.revokeObjectURL(url);
         });
       });
     }
 
-    // Metadata scraping
-    let scraped = { title: "", description: "", siteName: "" };
+    // RUN AI METADATA (GPT-4.1 Vision)
+    const metadata = await generateAIMetadata(blobRes.url);
 
-    try {
-      scraped = await scrapeMetadata(blobRes.url);
-    } catch (e) {
-      console.warn("Metadata scrape failed:", e);
-    }
-
-    // Insert row into Postgres
+    // Insert into Postgres
     const { rows } = await sql`
       INSERT INTO inspo_images (
         blob_url,
@@ -66,19 +57,20 @@ export async function POST(req: Request) {
         color_palette,
         brand_refs,
         notes
-      ) VALUES (
+      )
+      VALUES (
         ${blobRes.url},
         ${file.name},
         ${mime},
         ${durationSeconds},
-        ${scraped.title || null},      -- project
-        ${null},                       -- medium
-        ${null},                       -- use_case
-        ${'{}'},                       -- style_tags
-        ${'{}'},                       -- vibes
-        ${'{}'},                       -- color_palette
-        ${'{}'},                       -- brand_refs
-        ${scraped.description || null} -- notes
+        ${metadata.project},
+        ${metadata.medium},
+        ${metadata.use_case},
+        ${JSON.stringify(metadata.style_tags)},
+        ${JSON.stringify(metadata.vibes)},
+        ${JSON.stringify(metadata.color_palette)},
+        ${JSON.stringify(metadata.brand_refs)},
+        ${metadata.notes}
       )
       RETURNING *;
     `;
@@ -92,4 +84,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
