@@ -5,17 +5,19 @@ const client = new OpenAI({
 });
 
 /**
- * Runs GPT-4.1 Vision to extract full structured metadata
- * for any uploaded image.
+ * Uses GPT-4.1 Vision to extract structured metadata from an uploaded image.
  */
 export async function generateAIMetadata(imageUrl: string) {
   try {
-    const response = await client.chat.completions.create({
+    const result = await client.responses.create({
       model: "gpt-4.1",
-      messages: [
+      input: [
         {
           role: "system",
-          content: `
+          content: [
+            {
+              type: "text",
+              text: `
 You analyze images and output metadata for a creative inspiration library.
 Return ONLY a strict JSON object with these keys:
 
@@ -31,43 +33,36 @@ Return ONLY a strict JSON object with these keys:
 }
 
 Rules:
-- Keep all strings short and clean.
-- Never invent exact hex values; infer approximate hex codes from colors.
-- Do NOT mention GPT, AI, speculation, or analysis steps.
-- If unsure, leave field null or empty array.
+- Keep strings short.
+- Never mention GPT or analysis steps.
+- If unsure: null or [].
 `
+            }
+          ]
         },
         {
           role: "user",
           content: [
-            { type: "input_text", text: "Extract structured metadata for this image." },
-            {
-              type: "image_url",
-              image_url: imageUrl
-            }
+            { type: "text", text: "Extract structured creative metadata for this image." },
+            { type: "input_image", image_url: imageUrl }
           ]
         }
       ],
-      temperature: 0.2,
-      max_tokens: 800
+      max_output_tokens: 1000,
+      temperature: 0.2
     });
 
-    const raw = response.choices[0].message?.content;
-    if (!raw) {
-      throw new Error("No metadata returned.");
-    }
-
-    // ensure valid JSON
-    const parsed = JSON.parse(raw);
+    const output = result.output_text;
+    const parsed = JSON.parse(output);
 
     return {
       project: parsed.project ?? null,
       medium: parsed.medium ?? null,
       use_case: parsed.use_case ?? null,
-      style_tags: Array.isArray(parsed.style_tags) ? parsed.style_tags : [],
-      vibes: Array.isArray(parsed.vibes) ? parsed.vibes : [],
-      color_palette: Array.isArray(parsed.color_palette) ? parsed.color_palette : [],
-      brand_refs: Array.isArray(parsed.brand_refs) ? parsed.brand_refs : [],
+      style_tags: parsed.style_tags ?? [],
+      vibes: parsed.vibes ?? [],
+      color_palette: parsed.color_palette ?? [],
+      brand_refs: parsed.brand_refs ?? [],
       notes: parsed.notes ?? null
     };
   } catch (err) {
