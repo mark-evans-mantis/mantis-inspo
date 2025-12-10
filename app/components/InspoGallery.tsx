@@ -55,7 +55,7 @@ export default function InspoGallery() {
 
     try {
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('file', file);                    // FIXED HERE
       if (project && project.trim()) {
         formData.append('project', project.trim());
       }
@@ -105,7 +105,6 @@ export default function InspoGallery() {
     e.preventDefault();
     e.stopPropagation();
 
-    // only reset if leaving the dropzone, not entering child elements
     if ((e.target as HTMLElement).classList.contains('dropzone')) {
       setDragActive(false);
     }
@@ -124,10 +123,7 @@ export default function InspoGallery() {
 
     const file = files[0];
     const project = projectRef.current?.value;
-    await uploadFile(file, project);
-
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    if (projectRef.current) projectRef.current.value = '';
+    await uploadFile(file, project);                    // THIS WAS ALREADY CORRECT
   }
 
   function applyFilters() {
@@ -231,9 +227,9 @@ export default function InspoGallery() {
           <button type="button" onClick={applyFilters}>
             Apply
           </button>
-          <button type="button" onClick={clearFilters}>
-            Clear
-          </button>
+            <button type="button" onClick={clearFilters}>
+              Clear
+            </button>
         </div>
       </section>
 
@@ -247,10 +243,13 @@ export default function InspoGallery() {
                 : `${images.length.toString().padStart(2, '0')} images`}
             </span>
           </div>
+
+          {/* GALLERY GRID */}
           <div className="gallery-grid">
             {images.length === 0 && (
               <p className="empty">No images yet. Upload something to start.</p>
             )}
+
             {images.map((img) => (
               <div
                 key={img.id}
@@ -271,9 +270,7 @@ export default function InspoGallery() {
                     {(img.style_tags || [])
                       .slice(0, 3)
                       .map((t) => (
-                        <span key={t} className="tag">
-                          {t}
-                        </span>
+                        <span key={t} className="tag">{t}</span>
                       ))}
                   </div>
                   {img.project && (
@@ -284,9 +281,10 @@ export default function InspoGallery() {
                 </div>
               </div>
             ))}
-          </div>
+          </div> 
         </section>
 
+        {/* DETAIL PANEL */}
         {selected && (
           <aside className="detail-panel">
             <button
@@ -298,63 +296,59 @@ export default function InspoGallery() {
             </button>
             <div className="detail-content">
               <div className="detail-image-wrapper">
-                <img
-                  src={selected.blobUrl}
-                  alt={selected.originalName || ''}
-                />
+                <img src={selected.blobUrl} alt={selected.originalName || ''} />
               </div>
-              <h2>
-                {selected.project || selected.originalName || 'Inspo image'}
-              </h2>
+
+              <h2>{selected.project || selected.originalName || 'Inspo image'}</h2>
+
               <p className="detail-meta-line">
                 <strong>Use case:</strong> {selected.use_case || '—'} &nbsp;|&nbsp;
                 <strong>Medium:</strong> {selected.medium || '—'}
               </p>
+
               {selected.brand_refs?.length > 0 && (
                 <p className="detail-meta-line">
                   <strong>Brand refs:</strong> {selected.brand_refs.join(', ')}
                 </p>
               )}
+
               {selected.style_tags?.length > 0 && (
                 <div className="pill-row">
                   <strong>Style tags:</strong>
                   {selected.style_tags.map((t) => (
-                    <span key={t} className="pill">
-                      {t}
-                    </span>
+                    <span key={t} className="pill">{t}</span>
                   ))}
                 </div>
               )}
+
               {selected.vibes?.length > 0 && (
                 <div className="pill-row">
                   <strong>Vibes:</strong>
                   {selected.vibes.map((v) => (
-                    <span key={v} className="pill vibe">
-                      {v}
-                    </span>
+                    <span key={v} className="pill vibe">{v}</span>
                   ))}
                 </div>
               )}
+
               {selected.color_palette?.length > 0 && (
                 <div className="palette-row">
-                  <strong>Palette:</strong>
-                  {selected.color_palette.map((hex) => (
-                    <div key={hex} className="swatch">
-                      <div
-                        className="swatch-color"
-                        style={{ background: hex }}
-                      />
+                  <strong>Palette:</strong> 
+                  {selected.color_palette.map((hex, i) => (
+                    <div key={i} className="swatch">
+                      <div className="swatch-color" style={{ background: hex }} />
                       <span className="swatch-label">{hex}</span>
                     </div>
                   ))}
                 </div>
               )}
+
               {selected.notes && (
                 <div className="notes">
                   <strong>Notes:</strong>
                   <p>{selected.notes}</p>
                 </div>
               )}
+
               <p className="timestamp">
                 <strong>Created at:</strong>{' '}
                 {new Date(selected.created_at).toLocaleString()}
