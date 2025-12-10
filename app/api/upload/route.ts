@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { put } from "@vercel/blob";
 
-// Import same metadata scraper used by /api/fetch-image
+// Import shared metadata scraper from fetch-image
 import { scrapeMetadata } from "@/app/api/fetch-image/route";
 
 export async function POST(req: Request) {
@@ -11,10 +11,13 @@ export async function POST(req: Request) {
     const file = formData.get("file") as File;
 
     if (!file) {
-      return NextResponse.json({ ok: false, error: "Missing file." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing file." },
+        { status: 400 }
+      );
     }
 
-    // Upload blob
+    // Upload file to Vercel Blob
     const blobRes = await put(`uploads/${Date.now()}-${file.name}`, file, {
       access: "public",
     });
@@ -22,9 +25,9 @@ export async function POST(req: Request) {
     // Detect MIME type
     const mime = file.type || "";
 
-    // ----------------------------
-    // OPTIONAL: Extract video duration
-    // ----------------------------
+    // ---------------------------------------------------
+    // Optional: Extract video duration
+    // ---------------------------------------------------
     let durationSeconds: number | null = null;
 
     if (mime.startsWith("video/")) {
@@ -42,9 +45,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // ----------------------------
-    // AUTO METADATA SCRAPING (same as import-link)
-    // ----------------------------
+    // ---------------------------------------------------
+    // Auto metadata scraping (title, description, siteName)
+    // ---------------------------------------------------
     let scraped = { title: "", description: "", siteName: "" };
 
     try {
@@ -53,7 +56,9 @@ export async function POST(req: Request) {
       console.warn("Metadata scrape failed:", e);
     }
 
-    // Insert row with metadata fields populated
+    // ---------------------------------------------------
+    // Insert into Postgres with correct array types
+    // ---------------------------------------------------
     const { rows } = await sql`
       INSERT INTO inspo_images (
         blob_url,
@@ -73,14 +78,14 @@ export async function POST(req: Request) {
         ${file.name},
         ${mime},
         ${durationSeconds},
-        ${scraped.title || null},
-        ${null},
-        ${null},
-        ${[]},
-        ${[]},
-        ${[]},
-        ${[]},
-        ${scraped.description || null}
+        ${scraped.title || null},      -- project
+        ${null},                       -- medium
+        ${null},                       -- use_case
+        ${sql.array([], "text")},      -- style_tags
+        ${sql.array([], "text")},      -- vibes
+        ${sql.array([], "text")},      -- color_palette
+        ${sql.array([], "text")},      -- brand_refs
+        ${scraped.description || null} -- notes
       )
       RETURNING *;
     `;
