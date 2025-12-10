@@ -1,530 +1,391 @@
 "use client";
 
-import React, { useState, useEffect, DragEvent } from "react";
+import React, { useCallback, useState } from "react";
 
-// Type for media returned from /api/images
-type InspoItem = {
-  id: number;
-  blobUrl: string;
-  thumbBlobUrl: string | null;
-  originalName: string;
-  project: string | null;
-  mimeType: string;
-  durationSeconds: number | null;
-  style_tags: string[];
-  vibes: string[];
-  color_palette: string[];
-  medium: string | null;
-  use_case: string | null;
-  brand_refs: string[];
-  notes: string | null;
-  created_at: string;
-  isVideo: boolean;
-  isGif: boolean;
+type Asset = {
+  id: string;
+  sourceUrl: string;
+  imageUrl: string;
+  title: string;
+  description: string;
+  siteName?: string;
+  createdAt: string;
 };
 
-export default function InspoGallery() {
-  const [items, setItems] = useState<InspoItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const [selected, setSelected] = useState<InspoItem | null>(null);
-
-  const [isUploading, setIsUploading] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-
-  const [imageUrl, setImageUrl] = useState("");
+const InspoGallery: React.FC = () => {
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [selected, setSelected] = useState<Asset | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  /* -----------------------------------------------------------
-     LOAD ITEMS FROM SERVER
-  ----------------------------------------------------------- */
-  async function loadItems() {
-    try {
-      setLoading(true);
-      const res = await fetch("/api/images");
+  // Simple id helper
+  const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-      if (!res.ok) {
-        console.error("Failed /api/images:", res.status);
-        setItems([]);
-        return;
-      }
+  // -----------------------------
+  // LINK IMPORT (Cosmos / Pinterest / IG / ANYTHING)
+  // -----------------------------
+  const handleImportFromUrl = useCallback(
+    async (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+      if (!urlInput.trim()) return;
 
-      const json = await res.json();
-      if (Array.isArray(json)) setItems(json);
-      else {
-        console.error("Unexpected payload:", json);
-        setItems([]);
-      }
-    } catch (err) {
-      console.error("Error loading items:", err);
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+      setIsImporting(true);
+      setError(null);
 
-  useEffect(() => {
-    loadItems();
-  }, []);
+      try {
+        const res = await fetch("/api/fetch-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: urlInput.trim() }),
+        });
 
-  /* -----------------------------------------------------------
-     VIDEO THUMBNAIL GENERATION (client-side)
-  ----------------------------------------------------------- */
-  function generateVideoThumbnail(
-    file: File
-  ): Promise<{ thumbFile: File; durationSeconds: number | null }> {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const video = document.createElement("video");
+        const data = await res.json();
 
-      video.preload = "metadata";
-      video.src = url;
-      video.muted = true;
-      video.playsInline = true;
-
-      const cleanup = () => URL.revokeObjectURL(url);
-
-      video.onerror = () => {
-        cleanup();
-        reject(new Error("Error loading video"));
-      };
-
-      video.onloadedmetadata = () => {
-        const duration = Number.isFinite(video.duration)
-          ? video.duration
-          : 0;
-
-        const captureTime =
-          duration > 0 ? Math.min(duration * 0.1, duration - 0.1) : 1;
-
-        video.currentTime = captureTime;
-      };
-
-      video.onseeked = () => {
-        const canvas = document.createElement("canvas");
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 360;
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          cleanup();
-          reject(new Error("Canvas unsupported"));
-          return;
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || "Failed to import link");
         }
 
-        ctx.drawImage(video, 0, 0, w, h);
+        const { asset } = data as { asset: any };
 
-        canvas.toBlob(
-          (blob) => {
-            cleanup();
-            if (!blob) {
-              reject(new Error("Thumbnail blob failed"));
-              return;
-            }
+        const newAsset: Asset = {
+          id: createId(),
+          sourceUrl: asset.sourceUrl || urlInput.trim(),
+          imageUrl: asset.imageUrl || asset.src || "",
+          title: asset.title || "",
+          description: asset.description || "",
+          siteName: asset.siteName || "",
+          createdAt: new Date().toISOString(),
+        };
 
-            const thumbFile = new File(
-              [blob],
-              file.name.replace(/\.[^/.]+$/, "") + "-thumb.jpg",
-              { type: "image/jpeg" }
-            );
-
-            resolve({
-              thumbFile,
-              durationSeconds: Number.isFinite(video.duration)
-                ? Math.round(video.duration)
-                : null,
-            });
-          },
-          "image/jpeg",
-          0.85
-        );
-      };
-    });
-  }
-
-  /* -----------------------------------------------------------
-     SEQUENTIAL UPLOAD
-  ----------------------------------------------------------- */
-  async function uploadFile(file: File) {
-    const formData = new FormData();
-
-    if (file.type.startsWith("video/")) {
-      try {
-        const { thumbFile, durationSeconds } =
-          await generateVideoThumbnail(file);
-
-        formData.append("image", file);
-        formData.append("thumb", thumbFile);
-
-        if (durationSeconds != null)
-          formData.append("duration", String(durationSeconds));
-      } catch (err) {
-        console.error("Failed thumbnail gen:", err);
-        formData.append("image", file);
+        setAssets((prev) => [newAsset, ...prev]);
+        setSelected(newAsset);
+        setUrlInput("");
+      } catch (err: any) {
+        console.error("Import error:", err);
+        setError(err?.message || "Failed to import link");
+      } finally {
+        setIsImporting(false);
       }
-    } else {
-      formData.append("image", file);
-    }
+    },
+    [urlInput]
+  );
 
-    formData.append("project", "");
+  // -----------------------------
+  // DRAG & DROP / FILE UPLOAD
+  // -----------------------------
+  const handleFilesUpload = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
 
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!res.ok) {
-      let msg = "Upload failed";
-      try {
-        const json = await res.json();
-        msg = json.error || msg;
-      } catch {}
-      throw new Error(msg);
-    }
-  }
-
-  async function handleUpload(files: FileList | File[]) {
     setIsUploading(true);
-    for (const file of Array.from(files)) {
-      try {
-        await uploadFile(file);
-      } catch (err) {
-        console.error(err);
-        alert("An upload failed. Continuing.");
-      }
-    }
-    setIsUploading(false);
-    loadItems();
-  }
-
-  /* -----------------------------------------------------------
-     DRAG & DROP
-  ----------------------------------------------------------- */
-  const onDragOver = (e: DragEvent) => {
-    e.preventDefault();
-    setDragActive(true);
-  };
-  const onDragLeave = (e: DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-  };
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    if (e.dataTransfer.files?.length)
-      handleUpload(e.dataTransfer.files);
-  };
-
-  /* -----------------------------------------------------------
-     URL IMPORT
-  ----------------------------------------------------------- */
-  async function importFromUrl() {
-    if (!imageUrl) return;
-    setIsImporting(true);
+    setError(null);
 
     try {
-      const res = await fetch("/api/fetch-image", {
-        method: "POST",
-        body: JSON.stringify({ url: imageUrl }),
-        headers: { "Content-Type": "application/json" },
-      });
+      const formData = new FormData();
+      // assumes /api/upload expects "file"
+      // if it supports multiple files, you can loop and append
+      formData.append("file", files[0]);
 
-      if (!res.ok) {
-        alert("Could not import from link.");
-        setIsImporting(false);
-        return;
-      }
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
 
       const data = await res.json();
-      const base64 = data.base64;
-      const mime = data.contentType ?? "application/octet-stream";
 
-      const bytes = Uint8Array.from(atob(base64), (c) =>
-        c.charCodeAt(0)
-      );
-      const blob = new Blob([bytes], { type: mime });
-
-      const ext =
-        mime.split("/")[1] ||
-        (mime.includes("video")
-          ? "mp4"
-          : mime.includes("image")
-          ? "jpg"
-          : "bin");
-
-      const f = new File([blob], `imported.${ext}`, { type: mime });
-
-      await handleUpload([f]);
-      setImageUrl("");
-    } catch (err) {
-      console.error(err);
-      alert("Import failed.");
-    }
-
-    setIsImporting(false);
-  }
-
-  /* -----------------------------------------------------------
-     DELETE
-  ----------------------------------------------------------- */
-  async function deleteItem(id: number) {
-    const ok = confirm("Delete permanently?");
-    if (!ok) return;
-
-    try {
-      const res = await fetch(`/api/images/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!res.ok) {
-        alert("Delete failed.");
-        return;
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "Failed to upload");
       }
-      loadItems();
-    } catch (err) {
-      console.error("Delete failed:", err);
-      alert("Error deleting.");
+
+      // Expecting something like { ok: true, url: string }
+      const imageUrl: string = data.url || data.imageUrl;
+
+      const newAsset: Asset = {
+        id: createId(),
+        sourceUrl: imageUrl,
+        imageUrl,
+        title: "",
+        description: "",
+        siteName: "",
+        createdAt: new Date().toISOString(),
+      };
+
+      setAssets((prev) => [newAsset, ...prev]);
+      setSelected(newAsset);
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      setError(err?.message || "Failed to upload");
+    } finally {
+      setIsUploading(false);
     }
-  }
+  }, []);
 
-  /* -----------------------------------------------------------
-     RENDER
-  ----------------------------------------------------------- */
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    handleFilesUpload(files);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  // -----------------------------
+  // RENDER
+  // -----------------------------
   return (
-    <div className="flex flex-col gap-8">
-      {/* UPLOAD PANEL */}
-      <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm space-y-6">
-        <div
-          className={`rounded-xl border-2 border-dashed p-8 text-center transition ${
-            dragActive
-              ? "border-black bg-neutral-100"
-              : "border-neutral-300 bg-neutral-50"
-          }`}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
+    <div className="flex h-full w-full flex-col bg-[#f0f0f0] text-black">
+      {/* TOP BAR: URL IMPORT + UPLOAD */}
+      <div className="flex items-center gap-3 border-b border-black/10 bg-white px-6 py-4">
+        <form
+          onSubmit={handleImportFromUrl}
+          className="flex flex-1 items-center gap-2"
         >
-          <p className="text-sm font-medium mb-2">
-            Drag & drop media here
-          </p>
-          <p className="text-xs text-neutral-500">
-            Supports GIFs, MP4, MOV, JPG, PNG, WEBP…
-          </p>
+          <input
+            type="url"
+            placeholder="Paste a link from Cosmos, Pinterest, Instagram, etc."
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            className="flex-1 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-black/40"
+          />
+          <button
+            type="submit"
+            disabled={!urlInput.trim() || isImporting}
+            className="rounded-xl border border-black bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-black/80 disabled:cursor-not-allowed disabled:border-black/30 disabled:bg-black/30"
+          >
+            {isImporting ? "Importing…" : "Import"}
+          </button>
+        </form>
 
-          <div className="mt-4">
-            <label className="cursor-pointer inline-block px-4 py-2 bg-black text-white text-xs rounded-lg hover:bg-neutral-800">
-              Select files
-              <input
-                type="file"
-                accept="image/*,video/*"
-                multiple
-                className="hidden"
-                onChange={(e) =>
-                  e.target.files && handleUpload(e.target.files)
-                }
-              />
-            </label>
+        <label className="cursor-pointer rounded-xl border border-black/20 bg-white px-4 py-2 text-sm font-medium shadow-sm transition hover:shadow-md">
+          {isUploading ? "Uploading…" : "Upload"}
+          <input
+            type="file"
+            className="hidden"
+            accept="image/*"
+            onChange={(e) => handleFilesUpload(e.target.files)}
+          />
+        </label>
+      </div>
+
+      {/* ERROR BANNER */}
+      {error && (
+        <div className="bg-red-100 px-6 py-2 text-xs text-red-700">
+          {error}
+        </div>
+      )}
+
+      {/* MAIN: DROP ZONE + GALLERY */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* LEFT: DROP ZONE + GRID */}
+        <div className="flex-1 overflow-y-auto px-6 py-6">
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            className={`mb-6 flex min-h-[140px] items-center justify-center rounded-2xl border border-dashed border-black/20 bg-[url('/noise.png')] bg-cover bg-center px-6 text-center text-xs font-medium uppercase tracking-wide text-black/60 transition ${
+              isDragging ? "border-black/70 bg-black/5" : ""
+            }`}
+          >
+            <span>Drag &amp; drop media here or use Import / Upload</span>
           </div>
 
-          {isUploading && (
-            <p className="text-xs text-neutral-500 mt-2">Uploading…</p>
+          {/* GRID */}
+          {assets.length === 0 ? (
+            <div className="mt-10 text-center text-xs text-black/50">
+              No media yet. Import a link or drag something in.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
+              {assets.map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  onClick={() => setSelected(asset)}
+                  className="group relative aspect-[3/4] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl"
+                >
+                  {asset.imageUrl ? (
+                    <img
+                      src={asset.imageUrl}
+                      alt={asset.title || "Imported image"}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-[10px] text-black/40">
+                      No image
+                    </div>
+                  )}
+                  <div className="pointer-events-none absolute inset-0 bg-black/0 transition group-hover:bg-black/5" />
+                  {asset.siteName && (
+                    <div className="absolute bottom-2 left-2 rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-black/70">
+                      {asset.siteName}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
-        {/* URL import */}
-        <div className="space-y-2">
-          <p className="text-sm font-medium">Import from link</p>
-          <div className="flex gap-2">
-            <input
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://example.com/media"
-              className="flex-1 border rounded-lg px-3 py-2 text-sm"
-            />
-            <button
-              disabled={!imageUrl || isImporting}
-              onClick={importFromUrl}
-              className="px-4 py-2 bg-black text-white text-xs rounded-lg disabled:opacity-40"
-            >
-              {isImporting ? "Importing…" : "Import"}
-            </button>
-          </div>
-        </div>
-      </section>
+        {/* RIGHT: DETAIL PANEL (like your modal info area) */}
+        <div className="hidden w-[320px] flex-shrink-0 border-l border-black/10 bg-white/80 px-4 py-4 text-xs text-black/80 md:block">
+          {selected ? (
+            <div className="flex h-full flex-col">
+              <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-black">
+                Details
+              </div>
+              <div className="mb-3 aspect-[3/4] w-full overflow-hidden rounded-xl border border-black/10 bg-black/5">
+                {selected.imageUrl && (
+                  <img
+                    src={selected.imageUrl}
+                    alt={selected.title || "Selected image"}
+                    className="h-full w-full object-cover"
+                  />
+                )}
+              </div>
 
-      {/* GALLERY */}
-      <section>
-        <h2 className="text-xs uppercase tracking-wide text-neutral-600 mb-4">
-          Library ({items.length})
-        </h2>
-
-        {loading ? (
-          <p className="text-sm text-neutral-500">Loading…</p>
-        ) : items.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            No media yet.
-          </p>
-        ) : (
-          <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-            {items.map((item) => (
-              <div
-                key={item.id}
-                className="
-                  relative group bg-white border rounded-xl overflow-hidden 
-                  shadow-sm hover:shadow-xl hover:-translate-y-[2px] 
-                  transition-all duration-200 cursor-pointer
-                "
-              >
-                {/* DELETE button */}
-                <button
-                  onClick={() => deleteItem(item.id)}
-                  className="
-                    absolute top-2 right-2 z-10 
-                    opacity-0 group-hover:opacity-100 
-                    transition bg-black/60 text-white text-xs 
-                    px-2 py-1 rounded
-                  "
-                >
-                  Delete
-                </button>
-
-                {/* MEDIA PREVIEW */}
-                <button
-                  className="w-full text-left"
-                  onClick={() => setSelected(item)}
-                >
-                  <div className="aspect-[4/3] bg-neutral-100 overflow-hidden">
-                    {item.mimeType?.startsWith("video/") ? (
-                      <video
-                        src={item.blobUrl}
-                        muted
-                        loop
-                        autoPlay
-                        playsInline
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          const vid = e.currentTarget;
-                          if (item.thumbBlobUrl)
-                            vid.src = item.thumbBlobUrl;
-                        }}
-                      />
-                    ) : (
-                      <img
-                        src={item.blobUrl}
-                        className="w-full h-full object-cover"
-                      />
-                    )}
+              <div className="space-y-2 overflow-y-auto">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-black/50">
+                    Title
                   </div>
+                  <div className="text-xs font-medium">
+                    {selected.title || "—"}
+                  </div>
+                </div>
 
-                  {/* NO FILENAME — just tags + date */}
-                  <div className="p-3 space-y-1">
-                    <div className="flex flex-wrap gap-1 text-[10px] text-neutral-500">
-                      {item.style_tags?.slice(0, 3).map((tag, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 bg-neutral-100 rounded-full"
-                        >
-                          {tag}
-                        </span>
-                      ))}
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-black/50">
+                    Description
+                  </div>
+                  <div className="text-xs">
+                    {selected.description || "—"}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-black/50">
+                    Source
+                  </div>
+                  <a
+                    href={selected.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="break-all text-[11px] text-blue-600 underline"
+                  >
+                    {selected.sourceUrl}
+                  </a>
+                </div>
+
+                {selected.siteName && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-black/50">
+                      Site
                     </div>
-
-                    <p className="text-[10px] text-neutral-400">
-                      {new Date(item.created_at).toLocaleDateString()}
-                    </p>
+                    <div className="text-xs">{selected.siteName}</div>
                   </div>
-                </button>
+                )}
+
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-black/50">
+                    Created
+                  </div>
+                  <div className="text-xs">
+                    {new Date(selected.createdAt).toLocaleString()}
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* MODAL PREVIEW */}
-      {selected && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center p-6 z-50"
-          onClick={() => setSelected(null)}
-        >
-          <div
-            className="bg-[#111] rounded-xl p-6 w-full max-w-4xl relative text-white overflow-auto max-h-[95vh]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              className="absolute right-4 top-4 bg-white/10 px-3 py-1 rounded text-xs"
-              onClick={() => setSelected(null)}
-            >
-              Close
-            </button>
-
-            <div className="aspect-video bg-black rounded-xl overflow-hidden mb-4">
-              {selected.mimeType?.startsWith("video/") ? (
-                <video
-                  src={selected.blobUrl}
-                  controls
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-contain"
-                />
-              ) : (
-                <img
-                  src={selected.blobUrl}
-                  className="w-full h-full object-contain"
-                />
-              )}
             </div>
+          ) : (
+            <div className="flex h-full items-center justify-center text-[11px] text-black/40">
+              Select an item to see details
+            </div>
+          )}
+        </div>
+      </div>
 
-            {/* FULL METADATA */}
-            <div className="grid grid-cols-2 gap-6 text-xs">
-              <div>
-                <p className="font-medium text-sm text-white mb-2">
-                  {selected.originalName}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Project: </span>
-                  {selected.project || "—"}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Medium: </span>
-                  {selected.medium}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Use case: </span>
-                  {selected.use_case}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Duration: </span>
-                  {selected.durationSeconds || 0}s
-                </p>
-                <p>
-                  <span className="text-neutral-500">Created: </span>
-                  {new Date(selected.created_at).toLocaleString()}
-                </p>
+      {/* SIMPLE MOBILE MODAL FOR SELECTED ITEM */}
+      {selected && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4 md:hidden">
+          <div className="max-h-full w-full max-w-sm overflow-hidden rounded-2xl bg-white text-xs text-black shadow-xl">
+            <div className="flex items-center justify-between border-b border-black/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide">
+              <span>Details</span>
+              <button
+                className="text-[11px] text-black/60"
+                onClick={() => setSelected(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="space-y-2 overflow-y-auto px-4 py-3">
+              <div className="aspect-[3/4] w-full overflow-hidden rounded-xl border border-black/10 bg-black/5">
+                {selected.imageUrl && (
+                  <img
+                    src={selected.imageUrl}
+                    alt={selected.title || "Selected image"}
+                    className="h-full w-full object-cover"
+                  />
+                )}
               </div>
 
               <div>
-                <p>
-                  <span className="text-neutral-500">Style tags: </span>
-                  {selected.style_tags?.join(", ")}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Vibes: </span>
-                  {selected.vibes?.join(", ")}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Color palette: </span>
-                  {selected.color_palette?.join(", ")}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Brand refs: </span>
-                  {selected.brand_refs?.join(", ")}
-                </p>
-                <p>
-                  <span className="text-neutral-500">Notes: </span>
-                  {selected.notes || "—"}
-                </p>
+                <div className="text-[10px] uppercase tracking-wide text-black/50">
+                  Title
+                </div>
+                <div className="text-xs font-medium">
+                  {selected.title || "—"}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-black/50">
+                  Description
+                </div>
+                <div className="text-xs">{selected.description || "—"}</div>
+              </div>
+
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-black/50">
+                  Source
+                </div>
+                <a
+                  href={selected.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all text-[11px] text-blue-600 underline"
+                >
+                  {selected.sourceUrl}
+                </a>
+              </div>
+
+              {selected.siteName && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-black/50">
+                    Site
+                  </div>
+                  <div className="text-xs">{selected.siteName}</div>
+                </div>
+              )}
+
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-black/50">
+                  Created
+                </div>
+                <div className="text-xs">
+                  {new Date(selected.createdAt).toLocaleString()}
+                </div>
               </div>
             </div>
           </div>
@@ -532,4 +393,6 @@ export default function InspoGallery() {
       )}
     </div>
   );
-}
+};
+
+export default InspoGallery;
